@@ -23,7 +23,8 @@ function formatLocal(date, timezone = 'UTC') {
 }
 
 function parseTimeOfDay(value) {
-  const match = String(value).match(/\b([01]?\d|2[0-3])(?::([0-5]\d))?\s*(am|pm)?\b/i);
+  const normalized = normalizeTimePhrases(value);
+  const match = String(normalized).match(/\b([01]?\d|2[0-3])(?::([0-5]\d))?\s*(am|pm)?\b/i);
   if (!match) return null;
   let hour = Number(match[1]);
   const minute = Number(match[2] || 0);
@@ -95,7 +96,7 @@ function nextWeeklyRun(dayOfWeek, hour, minute, from = new Date(), timezone = 'U
 }
 
 function parseFlexibleSchedule(text, timezone = 'UTC', from = new Date()) {
-  const raw = String(text || '').toLowerCase();
+  const raw = normalizeTimePhrases(String(text || '').toLowerCase());
   const once = parseOneTimeSchedule(raw, timezone, from);
   if (once) return once;
 
@@ -123,7 +124,7 @@ function parseFlexibleSchedule(text, timezone = 'UTC', from = new Date()) {
     saturday: 6,
   };
   for (const [name, index] of Object.entries(days)) {
-    if (raw.includes(`every ${name}`) || raw.includes(`each ${name}`)) {
+    if (raw.includes(`every ${name}`) || raw.includes(`each ${name}`) || raw.includes(`every week ${name}`) || raw.includes(`weekly ${name}`)) {
       const time = parseTimeOfDay(raw) || { hour: 9, minute: 0 };
       return { type: 'weekly', dayOfWeek: index, hour: time.hour, minute: time.minute, timezone, nextRunAt: toIso(nextWeeklyRun(index, time.hour, time.minute, from, timezone)) };
     }
@@ -138,6 +139,21 @@ function parseFlexibleSchedule(text, timezone = 'UTC', from = new Date()) {
 }
 
 function parseOneTimeSchedule(raw, timezone, from) {
+  if (/\btomorrow\b/.test(raw)) {
+    const time = parseTimeOfDay(raw) || { hour: 9, minute: 0 };
+    const parts = getZonedParts(from, timezone);
+    const tomorrow = addDaysToYmd(parts.year, parts.month, parts.day, 1);
+    return { type: 'once', timezone, runAt: toIso(zonedTimeToUtc(tomorrow.year, tomorrow.month, tomorrow.day, time.hour, time.minute, timezone)) };
+  }
+
+  const nextDay = raw.match(/\bnext\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)(?:\s+(morning|afternoon|evening|night))?\b/i);
+  if (nextDay) {
+    const days = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
+    const defaultHour = nextDay[2] === 'afternoon' ? 14 : nextDay[2] === 'evening' || nextDay[2] === 'night' ? 20 : 9;
+    const time = parseTimeOfDay(raw) || { hour: defaultHour, minute: 0 };
+    return { type: 'once', timezone, runAt: toIso(nextWeeklyRun(days[nextDay[1].toLowerCase()], time.hour, time.minute, from, timezone)) };
+  }
+
   const inMatch = raw.match(/\bin\s+(\d+)\s*(minute|minutes|min|mins|hour|hours|hr|hrs|day|days)\b/);
   if (inMatch) {
     const amount = Number(inMatch[1]);
@@ -152,7 +168,7 @@ function parseOneTimeSchedule(raw, timezone, from) {
     september: 9, sep: 9, october: 10, oct: 10, november: 11, nov: 11, december: 12, dec: 12,
   };
   const monthNames = Object.keys(months).join('|');
-  const match = raw.match(new RegExp(`\\b(?:on\\s+)?(${monthNames})\\s+(\\d{1,2})(?:,\\s*(\\d{4}))?(?:\\s+(?:at\\s+)?)?([01]?\\d|2[0-3])(?::([0-5]\\d))?\\s*(am|pm)?\\b`, 'i'));
+  const match = raw.match(new RegExp(`\\b(?:on\\s+)?(${monthNames})\\s+(\\d{1,2})(?:,\\s*(\\d{4}))?(?:,)?(?:\\s+(?:at\\s+)?)?([01]?\\d|2[0-3])(?::([0-5]\\d))?\\s*(am|pm)?\\b`, 'i'));
   if (!match) return null;
   const nowParts = getZonedParts(from, timezone);
   const month = months[match[1].toLowerCase()];
@@ -166,6 +182,12 @@ function parseOneTimeSchedule(raw, timezone, from) {
   let runAt = zonedTimeToUtc(year, month, day, hour, minute, timezone);
   if (!match[3] && runAt <= from) runAt = zonedTimeToUtc(year + 1, month, day, hour, minute, timezone);
   return { type: 'once', timezone, runAt: toIso(runAt) };
+}
+
+function normalizeTimePhrases(value) {
+  return String(value || '')
+    .replace(/\b([01]?\d|2[0-3])\s*(am|pm)\s+([0-5]?\d)\s*(?:minute|minutes|min|mins)\b/gi, '$1:$3 $2')
+    .replace(/\b([01]?\d|2[0-3])\s+([0-5]?\d)\s*(?:minute|minutes|min|mins)\s*(am|pm)\b/gi, '$1:$2 $3');
 }
 
 function computeNextRun(schedule, from = new Date(), timezone = schedule?.timezone || 'UTC') {

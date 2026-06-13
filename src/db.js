@@ -82,6 +82,17 @@ function migrate(database) {
       decided_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS telemetry (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id TEXT,
+      kind TEXT NOT NULL,
+      label TEXT NOT NULL,
+      status TEXT NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      detail TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS uploaded_files (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       chat_id TEXT NOT NULL,
@@ -103,6 +114,13 @@ function migrate(database) {
       sent_at TEXT
     );
   `);
+}
+
+function recordTelemetry({ chatId = null, kind, label, status, durationMs, detail = '' }) {
+  openDb().prepare(`
+    INSERT INTO telemetry (chat_id, kind, label, status, duration_ms, detail)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(chatId === null ? null : String(chatId), kind, label, status, Math.round(durationMs), String(detail).slice(0, 1000));
 }
 
 function getSetting(key, fallback = null) {
@@ -152,4 +170,5 @@ module.exports = {
   setSetting,
   addConversation,
   getConversation,
+  recordTelemetry,
 };

@@ -38,6 +38,9 @@ function renderStatsReport(summary) {
   const lines = ['📊 <b>GitHub Stats Report</b>'];
   lines.push(`⭐ Total stars: ${summary.totalStars} (${delta(summary.starDelta)})`);
   lines.push(`🍴 Total forks: ${summary.totalForks} (${delta(summary.forkDelta)})`);
+  if (summary.totalViews || summary.totalClones) {
+    lines.push(`👀 Views: ${summary.totalViews || 0} · 📥 Clones: ${summary.totalClones || 0}`);
+  }
   if (summary.topMovement?.length) {
     lines.push('\n📈 <b>Top movement</b>');
     summary.topMovement.slice(0, 5).forEach(item => {

@@ -36,6 +36,8 @@ function createBot(token) {
   });
 
   bot.command('status', ctx => handleText(ctx, 'status'));
+  bot.command('settings', ctx => handleText(ctx, 'settings'));
+  bot.command('reset_setup', ctx => handleText(ctx, 'reset setup'));
   bot.command('models', ctx => handleText(ctx, 'models'));
   bot.command('jobs', ctx => handleText(ctx, 'jobs'));
 

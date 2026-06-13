@@ -4,47 +4,47 @@ Date: 2026-06-13
 
 ## Summary
 
-The bot works as a first usable v1 personal GitHub agent, but it is not yet a complete "all GitHub actions" agent. The strongest working areas are setup, Telegram startup, outbound Telegram messaging, GitHub read access, scheduled job storage, repo/README presentation audits, trend digest plumbing, stats snapshots, and natural recurring task creation.
+The bot is now a working v1 personal GitHub agent with natural Telegram chat, setup/onboarding, scheduled jobs, GitHub reads, approval-gated GitHub writes, file upload memory, formatted Telegram responses, and live startup/outbound Telegram verification.
 
-The most important gaps found during this audit were fixed:
+It is still not a magical "all GitHub actions with perfect reasoning" agent. The current implementation covers a practical foundation: it parses many common natural GitHub actions, blocks destructive actions by default, asks approval before writes, and falls back to a model for general conversation. A deeper JSON planner/tool executor is still the main next architecture step.
 
-- Runtime model switching was saved but not used by model selection.
-- Default jobs enabled during onboarding were not seeded until restart.
-- Scheduling was based on local machine time rather than the configured timezone.
-- "Every 1 hour and 37 minutes" and "June 21 at 4:37 PM" style schedules were not parsed.
-- "N minutes earlier" metric requests were stored as text only; now they create a helper snapshot job.
-- Jobs could be listed but not paused/resumed/deleted naturally.
+## Fixes Applied
 
-Additional UX issue reported after live use:
+- Added response telemetry storage and a `telemetry`/`slow replies` view.
+- Added delayed progress messages, typing indicators, and friendlier timeout/rate-limit/permission errors.
+- Added natural job editing: move time, make daily/weekly, set repo filter.
+- Added flexible time parsing for:
+  - compound intervals such as "every 1 hour and 37 minutes"
+  - one-time dates such as "June 21 at 4:37 PM"
+  - casual phrasing such as "June 21, 4 PM 37 minute"
+  - "tomorrow" and "next Friday afternoon"
+  - "every week Monday"
+- Added helper snapshot jobs for "N minutes earlier" metric comparisons.
+- Extended scheduled metric checks to stars plus recent workflow failures.
+- Added approval execution for core GitHub writes:
+  - create/update/comment issue or PR
+  - add issue/PR labels
+  - update repo description/metadata
+  - replace topics
+  - update files by full content or exact line
+  - create branches
+  - open PRs
+  - create releases
+  - rerun/cancel/dispatch workflows
+- Added hard blocking for destructive actions:
+  - delete repo
+  - transfer repo
+  - change visibility
+  - delete branch
+  - delete file
+  - collaborator/member changes
+- Added README patch approvals and stale README detection by comparing repo activity against README activity.
+- Added uploaded-file search and "create issue from uploaded file" approval flow.
+- Added security/dependency alert check using Dependabot alerts where the token has access.
+- Added GitHub traffic views/clones to stats where GitHub allows access.
+- Added `/settings` and `/reset_setup`.
 
-- Some messages could take far too long with no visible feedback, especially when an LLM provider was slow.
-
-Fixes applied:
-
-- Added typing indicators for long tasks.
-- Added delayed progress messages for generic AI answers.
-- Added a configurable model timeout (`LLM_TIMEOUT_MS`, default 35s).
-- Added friendly timeout/permission/rate-limit error messages.
-- Reduced generic answer token budget.
-- Made daily GitHub summary repo checks concurrent with a limit instead of fully sequential.
-- Improved Telegram copy with emoji, bold section headers, and clearer status messages.
-
-## First-Round User Simulation
-
-I tested the bot as a first-time user conceptually and through handler-level simulations:
-
-- New user setup reads `.env` first.
-- Setup can answer side questions such as "what is a profile repo?" and returns to setup.
-- Setup accepts casual answers, skips, and defaults.
-- Natural job creation works for a complex request:
-  - "every 97 minutes tell me the stars of example-user/repo-a plus example-user/repo-b"
-- Complex timing logic now creates helper jobs:
-  - "every Monday at 9 compare stars for example-user/repo-a 5 minutes earlier than now"
-- Job listing works.
-- Job pausing works through natural language:
-  - "pause job 1"
-
-## Live Checks
+## Automated Checks
 
 Commands run:
 
@@ -57,104 +57,85 @@ npm start
 
 Results:
 
-- Unit/integration tests: passed, 15/15.
+- Unit/integration tests: passed, 33/33.
 - GitHub smoke test: passed.
 - GitHub API authenticated as the configured user.
 - Model detection found MiniMax models from `.env`.
 - Cheapest configured model selected: `minimax-m2.5-lightning`.
 - npm audit: 0 moderate-or-higher vulnerabilities.
-- Live bot startup: passed.
+- Live bot polling startup: passed as `@GitHubAgentManagerBot`.
 - Telegram outbound message through Bot API: passed.
- - UX patch smoke test: passed.
 
-## Telegram User Chat Limitation
+## Telegram Limitation
 
-I verified outbound bot messaging through Telegram's Bot API and live bot startup/polling. I did not impersonate the user's Telegram account because the Bot API cannot send inbound user messages to a bot. Telegram.app is installed locally, but driving a logged-in desktop Telegram client reliably would require GUI automation permissions and may be intrusive. Inbound behavior is covered by direct handler integration tests.
-
-Manual user test still recommended:
-
-1. Run `npm start`.
-2. Open Telegram and message the bot:
-   - `/start`
-   - `show jobs`
-   - `audit my repos`
-   - `every 1 hour and 37 minutes tell me the stars of Evan1108-Coder/TrendForge-Telegram-Bot`
-   - `pause job 1`
+I verified real startup and real outbound Telegram delivery. I did not impersonate the user's Telegram account for inbound messages. Telegram's Bot API does not let a bot create fake inbound user messages, and driving the local Telegram desktop app would be more intrusive than useful here. Inbound behavior is covered by handler-level tests.
 
 ## Criteria Coverage
 
 ### Working
 
-- Telegram bot starts.
-- Telegram outbound messages work.
-- Long tasks send clearer acknowledgement/progress messages.
-- Generic AI answers send a progress message if the model is slow.
-- Model calls now have a practical timeout instead of leaving chat stuck.
-- HTML formatting and message splitting are implemented.
-- `.env` is ignored and `.env.example` exists.
-- SQLite database auto-creates.
-- Setup reads `.env`.
-- Setup supports side questions.
-- Setup supports skip/default style answers.
-- GitHub auth works.
-- GitHub repo/user API reads work.
-- GitHub rate-limit headers are tracked.
-- Repo presentation audit exists.
-- README quality audit exists.
-- Suspicious/low-quality commit message detection exists.
-- Default jobs exist and are editable scheduled jobs.
-- Natural recurring job creation works.
-- Daily, weekly, interval, compound interval, and one-time month/date schedules parse.
-- Timezone-aware next-run calculation exists.
-- "N minutes earlier" metric comparisons create helper snapshot jobs.
-- Jobs can be listed.
-- Jobs can be paused, resumed, and deleted by natural language.
-- Stats snapshots are stored.
-- Trend sources are fetched with fallbacks.
-- File extraction supports text, PDF, DOCX, PPTX, RTF, HTML/JSON/CSV/Markdown/text.
-- Image uploads route to vision-capable model handling when configured.
-- Model provider detection works.
-- Runtime model preference now affects selection.
-- Friendly user-facing errors exist for timeout, permission, and rate-limit failures.
-- Tests and smoke script exist.
-- npm audit is clean.
+- `.env` is read locally and not committed.
+- SQLite database auto-creates required tables.
+- First-time setup reads env values and asks user-specific questions.
+- Setup accepts casual answers, skips, defaults, and side questions.
+- Telegram messages use HTML formatting, emojis, link-safe output, and safe chunking.
+- Long tasks show progress/typing instead of silently hanging.
+- Runtime model preference affects model selection.
+- Supported model providers are detected from configured keys.
+- Natural recurring jobs are stored as editable plans.
+- Daily, weekly, interval, compound interval, one-time, tomorrow, and next-weekday schedules parse.
+- "N minutes earlier" comparisons create helper prefetch jobs.
+- Jobs can be listed, paused, resumed, deleted, moved, and changed to daily/weekly.
+- GitHub auth, repo reads, issues, PRs, releases, workflow reads, commits, README/file reads work through the client.
+- Stats snapshots store stars, forks, views, and clones where available.
+- Repo/README presentation audits work.
+- Stale README checks compare latest repo commit against README commit.
+- Trend digest plumbing works with source fallbacks.
+- Uploaded files are stored with extracted text/summary.
+- Text, Markdown, CSV, JSON, HTML, PDF, DOCX, PPTX, RTF, PNG, JPG/JPEG, and AVIF are routed.
+- Image uploads use vision when the configured model supports vision.
+- Core GitHub writes create approval cards with approve/edit/cancel buttons.
+- Approved core writes have execution handlers.
+- Destructive GitHub operations are blocked by default.
+- Approval history and response telemetry can be viewed.
+- Token status/rate-limit details can be shown.
+- Live bot startup works.
+- Outbound Telegram messaging works.
 
 ### Partial
 
-- Natural language planning is pattern-based with LLM fallback, not a full general planner yet.
-- Approval storage and inline approval callbacks exist, but most write actions do not yet have full execution handlers.
-- Profile updates only support a controlled stats block.
-- GitHub write support is present at the client layer, but not exposed for every GitHub operation yet.
-- File vision depends on a configured vision-capable model; the current local MiniMax default is not vision-capable.
-- Traffic/views depend on GitHub token permissions and GitHub API availability.
-- Dependabot/security alert checks depend on token permission and repository settings.
-- Proactive monitoring exists as scheduled jobs, but continuous intelligent monitoring policies are still basic.
-- Historical comparisons are accurate after snapshots exist; the bot correctly cannot know old data it never captured.
+- The planner is still pattern-based plus LLM fallback, not a full general JSON planning engine.
+- Natural repo resolution is basic. Exact `owner/repo` works best.
+- The bot can code/edit files, but it is intentionally not a full coding agent.
+- GitHub traffic and Dependabot alerts depend on token permissions and repository settings.
+- Historical comparisons are only accurate after snapshots exist.
+- Vision depends on a vision-capable configured model; the current local default MiniMax model is not vision-capable.
+- Profile README updates only auto-apply inside the configured bot-controlled block.
+- Proactive monitoring exists through scheduled jobs and checks, but webhook-based real-time monitoring is not implemented.
 
 ### Not Yet Complete
 
-- Full "all GitHub actions" coverage.
-- Full diff preview and approval execution pipeline for every write.
-- Branch/PR creation flow exposed through natural chat.
-- Release creation flow exposed through natural chat.
-- Workflow dispatch/rerun/cancel exposed through natural chat.
-- Issue creation/update exposed through approval UI.
-- Repo settings/collaborator/admin actions.
-- Deep code editing with test execution.
+- Full GitHub API coverage for every admin/settings/collaborator operation.
 - Webhook-based GitHub event monitoring.
-- OCR for scanned PDFs/images.
-- Robust semantic memory retrieval.
-- Full automatic stale README detection based on commit diffs.
-- Full token-expiration proactive reminder beyond surfacing expiration header when GitHub provides it.
+- Full semantic planner that decomposes arbitrary multi-step requests into validated tool JSON.
+- Deep code-editing/test-running workflows comparable to a dedicated coding agent.
+- OCR for scanned PDFs/screenshots.
+- Robust long-term semantic memory retrieval.
+- Provider health checks and live pricing refresh.
+- Fine-grained token permission introspection beyond GitHub headers/API failures.
 
-## Fixes Applied During This Audit
+## Manual User Test Checklist
 
-- Added runtime model preference support in model selection.
-- Added timezone-aware daily/weekly schedule calculations.
-- Added compound interval parsing.
-- Added one-time date parsing for requests such as "June 21 at 4:37 PM".
-- Added helper snapshot jobs for "N minutes earlier" star comparison plans.
-- Added `snapshot_metric` job execution.
-- Added natural job pause/resume/delete.
-- Seed default jobs immediately after onboarding completion.
-- Added tests for the new behavior.
+1. Start the bot with `npm start`.
+2. In Telegram, try:
+   - `/start`
+   - `show jobs`
+   - `move job #1 to 8:15 AM`
+   - `set verbosity to quick`
+   - `create issue in owner/repo titled "Fix docs" body "Add setup section"`
+   - `delete repository owner/repo`
+   - `show open PRs in owner/repo`
+   - `every Monday at 9 compare stars for owner/repo 5 minutes earlier than now`
+3. Upload a supported file, then ask:
+   - `create issue from uploaded file in owner/repo`
+4. Confirm approval buttons behave correctly before using write actions on important repos.

@@ -9,7 +9,9 @@ A personal Telegram GitHub agent that keeps your repos, profile, docs, and proje
 - Reviews READMEs, repo descriptions, profile sections, and public project presentation.
 - Schedules flexible jobs as editable plans, not hard-coded commands.
 - Sends low-noise proactive alerts for meaningful changes.
-- Supports Telegram replies, forwarded messages, file uploads, progress updates, and inline approval buttons.
+- Supports Telegram replies, forwarded messages, file uploads, uploaded-file search, progress updates, and inline approval buttons.
+- Creates approval-gated GitHub changes for issues, labels, repo metadata, topics, files, branches, PRs, releases, and workflows.
+- Blocks destructive actions such as repo deletion, transfers, visibility changes, branch/file deletion, and collaborator changes by default.
 - Uses SQLite for memory, settings, scheduled jobs, snapshots, and approvals.
 - Supports multiple model providers through `.env`.
 
@@ -47,6 +49,10 @@ Commands exist for convenience, but natural language is the main interface.
 - `/start` - start setup or show status
 - `/help` - show examples
 - `/status` - show configuration and job status
+- `/settings` - show current settings
+- `/reset_setup` - restart onboarding
 - `/models` - show available models
 - `/jobs` - list scheduled jobs
-
+- `telemetry` - show recent response times
+- `approval log` - show recent approval records
+- `token status` - show GitHub token/rate-limit status

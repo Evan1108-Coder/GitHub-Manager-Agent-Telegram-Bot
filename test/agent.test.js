@@ -54,3 +54,38 @@ test('agent can pause scheduled jobs naturally', async () => {
   await handleText(ctx, 'pause job 1');
   assert.ok(ctx.replies[0].includes('Paused job #1'));
 });
+
+test('agent can edit a scheduled job time naturally', async () => {
+  const ctx = fakeCtx();
+  await handleText(ctx, 'move job #1 to 8:15 AM');
+  assert.ok(ctx.replies[0].includes('Updated job #1'));
+});
+
+test('agent creates approval for issue creation', async () => {
+  const ctx = fakeCtx();
+  await handleText(ctx, 'create issue in example-user/repo titled "Fix docs" body "Add setup section"');
+  assert.ok(ctx.replies[0].includes('Approval needed'));
+});
+
+test('agent creates approval from latest uploaded file', async () => {
+  openDb().prepare(`
+    INSERT INTO uploaded_files (chat_id, telegram_file_id, file_name, file_type, extracted_text, summary)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run('123', 'file-id', 'notes.md', 'text', 'The README install section is missing.', 'README notes');
+  const ctx = fakeCtx();
+  await handleText(ctx, 'create issue from uploaded file in example-user/repo');
+  assert.ok(ctx.replies[0].includes('Approval needed'));
+  assert.ok(ctx.replies[0].includes('latest uploaded file'));
+});
+
+test('agent blocks dangerous repo deletion', async () => {
+  const ctx = fakeCtx();
+  await handleText(ctx, 'delete repository example-user/repo');
+  assert.ok(ctx.replies[0].includes('Blocked'));
+});
+
+test('agent stores verbosity preference', async () => {
+  const ctx = fakeCtx();
+  await handleText(ctx, 'set verbosity to quick');
+  assert.ok(ctx.replies[0].includes('Verbosity updated'));
+});

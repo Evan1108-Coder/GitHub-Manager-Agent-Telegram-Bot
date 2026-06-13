@@ -108,6 +108,7 @@ class GitHubClient {
       since: options.since,
       until: options.until,
       sha: options.sha,
+      path: options.path,
     });
   }
 
@@ -143,6 +144,26 @@ class GitHubClient {
     });
   }
 
+  async rerunWorkflowRun(fullName, runId) {
+    const [owner, repo] = splitRepo(fullName);
+    return this.post(`/repos/${owner}/${repo}/actions/runs/${runId}/rerun`, {});
+  }
+
+  async cancelWorkflowRun(fullName, runId) {
+    const [owner, repo] = splitRepo(fullName);
+    return this.post(`/repos/${owner}/${repo}/actions/runs/${runId}/cancel`, {});
+  }
+
+  async dispatchWorkflow(fullName, workflowId, ref, inputs = {}) {
+    const [owner, repo] = splitRepo(fullName);
+    return this.post(`/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflowId)}/dispatches`, { ref, inputs });
+  }
+
+  async listWorkflowRunJobs(fullName, runId) {
+    const [owner, repo] = splitRepo(fullName);
+    return this.get(`/repos/${owner}/${repo}/actions/runs/${runId}/jobs`, { per_page: 100 });
+  }
+
   async getReadme(fullName) {
     const [owner, repo] = splitRepo(fullName);
     const content = await this.get(`/repos/${owner}/${repo}/readme`);
@@ -165,6 +186,15 @@ class GitHubClient {
     });
   }
 
+  async deleteFile(fullName, filePath, message, sha, branch) {
+    const [owner, repo] = splitRepo(fullName);
+    return this.request('delete', `/repos/${owner}/${repo}/contents/${encodePath(filePath)}`, {
+      message,
+      sha,
+      branch,
+    });
+  }
+
   async createIssue(fullName, title, body, options = {}) {
     const [owner, repo] = splitRepo(fullName);
     return this.post(`/repos/${owner}/${repo}/issues`, {
@@ -175,6 +205,21 @@ class GitHubClient {
     });
   }
 
+  async updateIssue(fullName, issueNumber, payload) {
+    const [owner, repo] = splitRepo(fullName);
+    return this.patch(`/repos/${owner}/${repo}/issues/${issueNumber}`, payload);
+  }
+
+  async commentIssue(fullName, issueNumber, body) {
+    const [owner, repo] = splitRepo(fullName);
+    return this.post(`/repos/${owner}/${repo}/issues/${issueNumber}/comments`, { body });
+  }
+
+  async addLabelsToIssue(fullName, issueNumber, labels) {
+    const [owner, repo] = splitRepo(fullName);
+    return this.post(`/repos/${owner}/${repo}/issues/${issueNumber}/labels`, { labels });
+  }
+
   async updateRepo(fullName, payload) {
     const [owner, repo] = splitRepo(fullName);
     return this.patch(`/repos/${owner}/${repo}`, payload);
@@ -183,6 +228,51 @@ class GitHubClient {
   async replaceTopics(fullName, names) {
     const [owner, repo] = splitRepo(fullName);
     return this.put(`/repos/${owner}/${repo}/topics`, { names });
+  }
+
+  async getBranch(fullName, branch) {
+    const [owner, repo] = splitRepo(fullName);
+    return this.get(`/repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}`);
+  }
+
+  async getRef(fullName, ref) {
+    const [owner, repo] = splitRepo(fullName);
+    return this.get(`/repos/${owner}/${repo}/git/ref/${encodePath(ref)}`);
+  }
+
+  async createRef(fullName, ref, sha) {
+    const [owner, repo] = splitRepo(fullName);
+    return this.post(`/repos/${owner}/${repo}/git/refs`, { ref, sha });
+  }
+
+  async createBranch(fullName, branch, fromBranch) {
+    const repo = await this.getRepo(fullName);
+    const source = await this.getBranch(fullName, fromBranch || repo.default_branch);
+    return this.createRef(fullName, `refs/heads/${branch}`, source.commit.sha);
+  }
+
+  async createPullRequest(fullName, { title, head, base, body, draft = false, maintainerCanModify = true }) {
+    const [owner, repo] = splitRepo(fullName);
+    return this.post(`/repos/${owner}/${repo}/pulls`, {
+      title,
+      head,
+      base,
+      body,
+      draft,
+      maintainer_can_modify: maintainerCanModify,
+    });
+  }
+
+  async createRelease(fullName, { tagName, targetCommitish, name, body, draft = false, prerelease = false }) {
+    const [owner, repo] = splitRepo(fullName);
+    return this.post(`/repos/${owner}/${repo}/releases`, {
+      tag_name: tagName,
+      target_commitish: targetCommitish,
+      name,
+      body,
+      draft,
+      prerelease,
+    });
   }
 
   async getTrafficViews(fullName) {

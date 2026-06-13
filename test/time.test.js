@@ -27,6 +27,23 @@ test('parses one-time month schedules', () => {
   assert.ok(schedule.runAt.includes('2026-06-21T08:37:00.000Z'));
 });
 
+test('parses casual one-time month schedules', () => {
+  const schedule = parseFlexibleSchedule('remind me June 21, 4 PM 37 minute', 'Asia/Hong_Kong', new Date('2026-06-13T00:00:00Z'));
+  assert.equal(schedule.type, 'once');
+  assert.ok(schedule.runAt.includes('2026-06-21T08:37:00.000Z'));
+});
+
+test('parses next weekday and weekly variants', () => {
+  const once = parseFlexibleSchedule('next Friday afternoon check issues', 'UTC', new Date('2026-06-13T00:00:00Z'));
+  assert.equal(once.type, 'once');
+  assert.ok(once.runAt.includes('2026-06-19T14:00:00.000Z'));
+
+  const weekly = parseFlexibleSchedule('every week Monday at 10 check stars', 'UTC', new Date('2026-06-13T00:00:00Z'));
+  assert.equal(weekly.type, 'weekly');
+  assert.equal(weekly.dayOfWeek, 1);
+  assert.equal(weekly.hour, 10);
+});
+
 test('computes daily next run in the future', () => {
   const next = computeNextRun({ type: 'daily', hour: 6, minute: 30, timezone: 'Asia/Hong_Kong' }, new Date('2026-06-11T07:00:00Z'));
   assert.ok(new Date(next) > new Date('2026-06-11T07:00:00Z'));

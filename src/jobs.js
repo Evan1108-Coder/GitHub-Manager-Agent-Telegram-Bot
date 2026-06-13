@@ -66,16 +66,38 @@ async function buildStatsReport() {
     db.prepare('INSERT INTO metric_snapshots (subject, metric, value, raw_json) VALUES (?, ?, ?, ?)').run(item.name, 'stars', item.stars, JSON.stringify(item));
     db.prepare('INSERT INTO metric_snapshots (subject, metric, value, raw_json) VALUES (?, ?, ?, ?)').run(item.name, 'forks', item.forks, JSON.stringify(item));
   });
+  const trafficRows = await mapLimit(current.slice(0, 10), 3, async item => {
+    const [views, clones] = await Promise.all([
+      github.getTrafficViews(item.name).catch(() => null),
+      github.getTrafficClones(item.name).catch(() => null),
+    ]);
+    return {
+      name: item.name,
+      views: views?.count || 0,
+      uniqueViews: views?.uniques || 0,
+      clones: clones?.count || 0,
+      uniqueClones: clones?.uniques || 0,
+    };
+  });
+  trafficRows.forEach(item => {
+    if (item.views) db.prepare('INSERT INTO metric_snapshots (subject, metric, value, raw_json) VALUES (?, ?, ?, ?)').run(item.name, 'views', item.views, JSON.stringify(item));
+    if (item.clones) db.prepare('INSERT INTO metric_snapshots (subject, metric, value, raw_json) VALUES (?, ?, ?, ?)').run(item.name, 'clones', item.clones, JSON.stringify(item));
+  });
   const totalStars = current.reduce((sum, item) => sum + item.stars, 0);
   const totalForks = current.reduce((sum, item) => sum + item.forks, 0);
+  const totalViews = trafficRows.reduce((sum, item) => sum + item.views, 0);
+  const totalClones = trafficRows.reduce((sum, item) => sum + item.clones, 0);
   const previousTotalStars = current.reduce((sum, item) => sum + previous[item.name], 0);
   const topMovement = current.map(item => ({ name: item.name, starDelta: item.stars - previous[item.name] })).sort((a, b) => b.starDelta - a.starDelta);
   const notes = [];
+  if (trafficRows.length) notes.push(`Traffic checked for ${trafficRows.length} recent repos where GitHub allowed access.`);
   if (github.tokenExpiration) notes.push(`GitHub token expiration header: ${github.tokenExpiration}`);
   if (github.lastRateLimit?.remaining) notes.push(`GitHub API remaining this hour: ${github.lastRateLimit.remaining}/${github.lastRateLimit.limit}`);
   return renderStatsReport({
     totalStars,
     totalForks,
+    totalViews,
+    totalClones,
     starDelta: totalStars - previousTotalStars,
     forkDelta: 0,
     topMovement,
@@ -146,55 +168,104 @@ async function runProfileUpdate() {
 
 async function runNaturalPlan(plan) {
   const text = plan.goal || plan.originalText || 'scheduled request';
-  if (/star/i.test(text)) {
-    return answerStarQuery(text, plan);
+  if (/switch.*model|use .*model|default model|change model/i.test(text)) {
+    return runScheduledModelChange(text);
+  }
+  if (/star|error|fail|broken workflow|workflow failure/i.test(text)) {
+    return answerMetricQuery(text, plan);
   }
   return `<b>Scheduled reminder</b>\n${escapeHtml(text)}`;
 }
 
-async function answerStarQuery(text, plan = {}) {
+function runScheduledModelChange(text) {
+  const { getAvailableModels } = require('./llm/providers');
+  const { setSetting } = require('./db');
+  const available = getAvailableModels();
+  const found = available.find(model => text.toLowerCase().includes(model.toLowerCase()));
+  if (!found) return `🤖 <b>Scheduled model change</b>\nI could not find the requested model among configured providers. Available: ${escapeHtml(available.join(', ') || 'none')}`;
+  setSetting('default_model', found);
+  return `🤖 <b>Scheduled model change</b>\nDefault model is now <code>${escapeHtml(found)}</code>.`;
+}
+
+async function answerMetricQuery(text, plan = {}) {
   const config = getConfig();
   const github = new GitHubClient();
   const repos = plan.prefetchRepos?.length ? plan.prefetchRepos : extractRepoNames(text, config.githubUsername);
-  if (!repos.length) return `<b>Star check</b>\nI need exact repo names to fetch stars. Original request: ${escapeHtml(text)}`;
+  if (!repos.length) return `<b>Metric check</b>\nI need exact repo names to fetch metrics. Original request: ${escapeHtml(text)}`;
+  const wantsStars = /star/i.test(text);
+  const wantsFailures = /error|fail|broken workflow|workflow failure/i.test(text);
   const rows = [];
   for (const repo of repos) {
-    const data = await github.getRepo(repo).catch(() => null);
-    if (data) {
-      const current = data.stargazers_count || 0;
-      const snapshot = plan.prefetchOffsetMinutes ? getLatestSnapshot(repo, `stars_prefetch_${plan.prefetchOffsetMinutes}`) : null;
-      rows.push({ repo, stars: current, before: snapshot?.value, delta: snapshot ? current - snapshot.value : null });
-    }
+    const data = wantsStars ? await github.getRepo(repo).catch(() => null) : null;
+    const failures = wantsFailures ? await countRecentWorkflowFailures(github, repo).catch(() => null) : null;
+    const starSnapshot = plan.prefetchOffsetMinutes && wantsStars ? getLatestSnapshot(repo, `stars_prefetch_${plan.prefetchOffsetMinutes}`) : null;
+    const failureSnapshot = plan.prefetchOffsetMinutes && wantsFailures ? getLatestSnapshot(repo, `workflow_failures_prefetch_${plan.prefetchOffsetMinutes}`) : null;
+    rows.push({
+      repo,
+      stars: data ? data.stargazers_count || 0 : null,
+      failures,
+      starsBefore: starSnapshot?.value,
+      starsDelta: starSnapshot ? (data?.stargazers_count || 0) - starSnapshot.value : null,
+      failuresBefore: failureSnapshot?.value,
+      failuresDelta: failureSnapshot && failures !== null ? failures - failureSnapshot.value : null,
+    });
   }
-  const total = rows.reduce((sum, item) => sum + item.stars, 0);
-  const lines = ['<b>Star check</b>'];
+  const total = rows.reduce((sum, item) => sum + (item.stars || 0) + (item.failures || 0), 0);
+  const lines = ['<b>Metric check</b>'];
   rows.forEach(item => {
-    if (item.before !== undefined && item.before !== null) {
-      lines.push(`- ${escapeHtml(item.repo)}: ${item.stars} (${item.delta >= 0 ? '+' : ''}${item.delta} since prefetch)`);
-    } else {
-      lines.push(`- ${escapeHtml(item.repo)}: ${item.stars}`);
+    const parts = [];
+    if (item.stars !== null) {
+      const starDelta = item.starsBefore !== undefined && item.starsBefore !== null ? ` (${item.starsDelta >= 0 ? '+' : ''}${item.starsDelta} since prefetch)` : '';
+      parts.push(`⭐ ${item.stars}${starDelta}`);
     }
+    if (item.failures !== null) {
+      const failureDelta = item.failuresBefore !== undefined && item.failuresBefore !== null ? ` (${item.failuresDelta >= 0 ? '+' : ''}${item.failuresDelta} since prefetch)` : '';
+      parts.push(`🚨 ${item.failures} recent failed workflow run(s)${failureDelta}`);
+    }
+    lines.push(`- ${escapeHtml(item.repo)}: ${parts.join(' · ') || 'No metric available'}`);
   });
-  lines.push(`Total: ${total}`);
-  if (plan.prefetchOffsetMinutes && rows.some(item => item.before === null || item.before === undefined)) {
+  lines.push(`Combined total: ${total}`);
+  if (plan.prefetchOffsetMinutes && rows.some(item => (
+    (wantsStars && (item.starsBefore === null || item.starsBefore === undefined)) ||
+    (wantsFailures && (item.failuresBefore === null || item.failuresBefore === undefined))
+  ))) {
     lines.push(`Note: I did not have a ${plan.prefetchOffsetMinutes}-minute-earlier snapshot for every repo yet. Future runs will be more accurate after the helper job captures data.`);
   }
   return lines.join('\n');
 }
 
 async function runSnapshotMetric(plan) {
-  if (plan.metric !== 'stars') return;
   const github = new GitHubClient();
   for (const repo of plan.repos || []) {
-    const data = await github.getRepo(repo).catch(() => null);
-    if (!data) continue;
-    openDb().prepare('INSERT INTO metric_snapshots (subject, metric, value, raw_json) VALUES (?, ?, ?, ?)').run(
-      repo,
-      `stars_prefetch_${plan.offsetMinutes}`,
-      data.stargazers_count || 0,
-      JSON.stringify({ relatedJobId: plan.relatedJobId, repo }),
-    );
+    if (plan.metric === 'stars' || plan.metric === 'mixed_metrics') {
+      const data = await github.getRepo(repo).catch(() => null);
+      if (data) {
+        openDb().prepare('INSERT INTO metric_snapshots (subject, metric, value, raw_json) VALUES (?, ?, ?, ?)').run(
+          repo,
+          `stars_prefetch_${plan.offsetMinutes}`,
+          data.stargazers_count || 0,
+          JSON.stringify({ relatedJobId: plan.relatedJobId, repo }),
+        );
+      }
+    }
+    if (plan.metric === 'workflow_failures' || plan.metric === 'mixed_metrics') {
+      const failures = await countRecentWorkflowFailures(github, repo).catch(() => null);
+      if (failures !== null) {
+        openDb().prepare('INSERT INTO metric_snapshots (subject, metric, value, raw_json) VALUES (?, ?, ?, ?)').run(
+          repo,
+          `workflow_failures_prefetch_${plan.offsetMinutes}`,
+          failures,
+          JSON.stringify({ relatedJobId: plan.relatedJobId, repo }),
+        );
+      }
+    }
   }
+}
+
+async function countRecentWorkflowFailures(github, repo) {
+  const runs = await github.listWorkflowRuns(repo, { perPage: 20 });
+  const items = runs.workflow_runs || [];
+  return items.filter(run => run.conclusion === 'failure' || run.status === 'failure').length;
 }
 
 function getLatestSnapshot(subject, metric) {
@@ -258,4 +329,5 @@ module.exports = {
   runNaturalPlan,
   auditOneRepo,
   runSnapshotMetric,
+  answerMetricQuery,
 };

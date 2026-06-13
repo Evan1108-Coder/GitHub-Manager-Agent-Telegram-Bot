@@ -2,6 +2,7 @@ function startTyping(ctx, intervalMs = 4500) {
   let active = true;
   const send = () => {
     if (!active) return;
+    if (!ctx.api?.sendChatAction) return;
     ctx.api.sendChatAction(ctx.chat.id, 'typing').catch(() => {});
   };
   send();
