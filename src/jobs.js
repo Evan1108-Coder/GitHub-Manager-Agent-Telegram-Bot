@@ -17,6 +17,10 @@ async function executeJob(job, bot) {
   if (plan.kind === 'daily_summary') return sendLong(bot, chatId, await buildDailySummary());
   if (plan.kind === 'stats_report') return sendLong(bot, chatId, await buildStatsReport());
   if (plan.kind === 'natural_request') return sendLong(bot, chatId, await runNaturalPlan(plan));
+  if (plan.kind === 'snapshot_metric') {
+    await runSnapshotMetric(plan);
+    return;
+  }
   return sendLong(bot, chatId, `Scheduled job ran, but I do not know this plan kind yet: ${escapeHtml(plan.kind)}`);
 }
 
@@ -85,26 +89,25 @@ async function buildDailySummary() {
   const since = new Date();
   since.setHours(0, 0, 0, 0);
   const repos = await github.listAuthenticatedRepos({ pages: 2 }).catch(() => github.listRepos(username, { pages: 2 }));
-  const touched = [];
-  const oddCommits = [];
-  for (const repo of repos.slice(0, 20)) {
+  const results = await mapLimit(repos.slice(0, 20), 5, async repo => {
     const commits = await github.listCommits(repo.full_name, { since: since.toISOString(), perPage: 10 }).catch(() => []);
-    if (commits.length) {
-      touched.push({ repo, commits: commits.length, latest: commits[0]?.commit?.message });
-      oddCommits.push(...suspiciousCommitMessages(commits).map(item => ({ ...item, repo: repo.full_name })));
-    }
-  }
-  const lines = ['<b>Daily GitHub Summary</b>'];
+    return { repo, commits };
+  });
+  const touched = results
+    .filter(item => item.commits.length)
+    .map(item => ({ repo: item.repo, commits: item.commits.length, latest: item.commits[0]?.commit?.message }));
+  const oddCommits = results.flatMap(item => suspiciousCommitMessages(item.commits).map(commit => ({ ...commit, repo: item.repo.full_name })));
+  const lines = ['📌 <b>Daily GitHub Summary</b>'];
   if (!touched.length) {
     lines.push('No commits detected today in the repos I checked.');
   } else {
     touched.slice(0, 8).forEach(item => lines.push(`- ${escapeHtml(item.repo.full_name)}: ${item.commits} commit(s). Latest: ${escapeHtml(oneLine(item.latest, 90))}`));
   }
   if (oddCommits.length) {
-    lines.push('\n<b>Commit notes</b>');
+    lines.push('\n🧪 <b>Commit notes</b>');
     oddCommits.slice(0, 5).forEach(item => lines.push(`- ${escapeHtml(item.repo)} ${escapeHtml(item.sha)}: ${escapeHtml(oneLine(item.message, 90))}`));
   }
-  lines.push('\n<b>Best next actions</b>');
+  lines.push('\n🚀 <b>Best next actions</b>');
   lines.push('- Check whether today’s changed repos need README/setup updates.');
   lines.push('- If a repo got meaningful work today, make sure its description still matches the actual project.');
   lines.push('- Add a demo/screenshot if the repo is meant to attract users.');
@@ -144,23 +147,64 @@ async function runProfileUpdate() {
 async function runNaturalPlan(plan) {
   const text = plan.goal || plan.originalText || 'scheduled request';
   if (/star/i.test(text)) {
-    return answerStarQuery(text);
+    return answerStarQuery(text, plan);
   }
   return `<b>Scheduled reminder</b>\n${escapeHtml(text)}`;
 }
 
-async function answerStarQuery(text) {
+async function answerStarQuery(text, plan = {}) {
   const config = getConfig();
   const github = new GitHubClient();
-  const repos = extractRepoNames(text, config.githubUsername);
+  const repos = plan.prefetchRepos?.length ? plan.prefetchRepos : extractRepoNames(text, config.githubUsername);
   if (!repos.length) return `<b>Star check</b>\nI need exact repo names to fetch stars. Original request: ${escapeHtml(text)}`;
   const rows = [];
   for (const repo of repos) {
     const data = await github.getRepo(repo).catch(() => null);
-    if (data) rows.push({ repo, stars: data.stargazers_count || 0 });
+    if (data) {
+      const current = data.stargazers_count || 0;
+      const snapshot = plan.prefetchOffsetMinutes ? getLatestSnapshot(repo, `stars_prefetch_${plan.prefetchOffsetMinutes}`) : null;
+      rows.push({ repo, stars: current, before: snapshot?.value, delta: snapshot ? current - snapshot.value : null });
+    }
   }
   const total = rows.reduce((sum, item) => sum + item.stars, 0);
-  return ['<b>Star check</b>', ...rows.map(item => `- ${escapeHtml(item.repo)}: ${item.stars}`), `Total: ${total}`].join('\n');
+  const lines = ['<b>Star check</b>'];
+  rows.forEach(item => {
+    if (item.before !== undefined && item.before !== null) {
+      lines.push(`- ${escapeHtml(item.repo)}: ${item.stars} (${item.delta >= 0 ? '+' : ''}${item.delta} since prefetch)`);
+    } else {
+      lines.push(`- ${escapeHtml(item.repo)}: ${item.stars}`);
+    }
+  });
+  lines.push(`Total: ${total}`);
+  if (plan.prefetchOffsetMinutes && rows.some(item => item.before === null || item.before === undefined)) {
+    lines.push(`Note: I did not have a ${plan.prefetchOffsetMinutes}-minute-earlier snapshot for every repo yet. Future runs will be more accurate after the helper job captures data.`);
+  }
+  return lines.join('\n');
+}
+
+async function runSnapshotMetric(plan) {
+  if (plan.metric !== 'stars') return;
+  const github = new GitHubClient();
+  for (const repo of plan.repos || []) {
+    const data = await github.getRepo(repo).catch(() => null);
+    if (!data) continue;
+    openDb().prepare('INSERT INTO metric_snapshots (subject, metric, value, raw_json) VALUES (?, ?, ?, ?)').run(
+      repo,
+      `stars_prefetch_${plan.offsetMinutes}`,
+      data.stargazers_count || 0,
+      JSON.stringify({ relatedJobId: plan.relatedJobId, repo }),
+    );
+  }
+}
+
+function getLatestSnapshot(subject, metric) {
+  const row = openDb().prepare(`
+    SELECT value, captured_at FROM metric_snapshots
+    WHERE subject = ? AND metric = ?
+    ORDER BY captured_at DESC, id DESC
+    LIMIT 1
+  `).get(subject, metric);
+  return row ? { value: Number(row.value), capturedAt: row.captured_at } : null;
 }
 
 function extractRepoNames(text, username) {
@@ -185,6 +229,19 @@ function fallbackTrendDigest(items) {
   };
 }
 
+async function mapLimit(items, limit, worker) {
+  const results = [];
+  let index = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (index < items.length) {
+      const current = index++;
+      results[current] = await worker(items[current], current);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
 async function auditOneRepo(repoName) {
   const github = new GitHubClient();
   const repo = await github.getRepo(repoName);
@@ -200,4 +257,5 @@ module.exports = {
   runProfileUpdate,
   runNaturalPlan,
   auditOneRepo,
+  runSnapshotMetric,
 };

@@ -3,9 +3,11 @@ const { envStatus, getConfig } = require('./config');
 const { isSetupComplete, startSetup, currentQuestion, handleSetupAnswer } = require('./setup');
 const { sendLong, escapeHtml, oneLine } = require('./utils/format');
 const { handleText, handleApprovalCallback } = require('./agent');
+const { seedDefaultJobs } = require('./scheduler');
 const { classifyFile, downloadTelegramFile, extractText, getSupportedExtensions, getImageBase64, getMimeType } = require('./files');
 const { openDb } = require('./db');
 const { chooseDefaultModel, supportsVision, chat, chatWithVision } = require('./llm/providers');
+const { withTyping, friendlyError } = require('./utils/ux');
 
 function createBot(token) {
   const bot = new Bot(token);
@@ -15,18 +17,18 @@ function createBot(token) {
       startSetup();
       return sendLong(ctx, currentQuestion());
     }
-    return sendLong(ctx, '<b>GitHub Manager Agent</b>\nI’m ready. Ask naturally, or use /help for examples.');
+    return sendLong(ctx, '👋 <b>GitHub Manager Agent</b>\nI’m ready. Ask naturally, or use /help for examples.');
   });
 
   bot.command('help', async ctx => {
     return sendLong(ctx, [
-      '<b>Examples</b>',
-      '- audit my repos',
-      '- show my GitHub stats',
-      '- summarize what I did today',
-      '- every Monday at 9 compare stars for Evan1108-Coder/TrendForge-Telegram-Bot',
-      '- update my profile README',
-      '- fetch morning builder trends',
+      '✨ <b>Examples</b>',
+      '🔎 audit my repos',
+      '📊 show my GitHub stats',
+      '📌 summarize what I did today',
+      '⏰ every Monday at 9 compare stars for Evan1108-Coder/TrendForge-Telegram-Bot',
+      '🛠️ update my profile README',
+      '🧭 fetch morning builder trends',
       '',
       'You can also reply to messages, forward GitHub-related text, or upload supported files.',
       `Supported files: ${escapeHtml(getSupportedExtensions().join(', '))}`,
@@ -46,6 +48,7 @@ function createBot(token) {
     const text = buildMessageContext(ctx);
     if (!isSetupComplete()) {
       const result = handleSetupAnswer(text);
+      if (result.done) seedDefaultJobs();
       return sendLong(ctx, result.message);
     }
     return handleText(ctx, text, { telegram: getTelegramContext(ctx) });
@@ -53,7 +56,7 @@ function createBot(token) {
 
   bot.on(['message:document', 'message:photo'], async ctx => {
     if (!isSetupComplete()) {
-      return sendLong(ctx, 'Setup is not complete yet. Finish setup first, then I can analyze files.');
+      return sendLong(ctx, '⚙️ <b>Setup is not complete yet.</b>\nFinish setup first, then I can analyze files.');
     }
     const msg = ctx.message;
     let fileId;
@@ -68,23 +71,29 @@ function createBot(token) {
     }
     const fileType = classifyFile(fileName);
     if (!fileType && msg.document) {
-      return sendLong(ctx, `Unsupported file type. Supported: ${escapeHtml(getSupportedExtensions().join(', '))}`);
+      return sendLong(ctx, `⚠️ <b>Unsupported file type.</b>\nSupported: ${escapeHtml(getSupportedExtensions().join(', '))}`);
     }
-    await ctx.reply('Got it. I’m downloading and reading the file…');
-    const localPath = await downloadTelegramFile(ctx.api, fileId, fileName);
-    let extracted = '';
-    let summary = '';
-    if (fileType?.kind === 'image') {
-      summary = await summarizeImage(localPath, fileName, msg.caption || '');
-    } else {
-      extracted = await extractText(localPath, fileName);
-      summary = await summarizeText(extracted, msg.caption || '');
+    await ctx.reply('📎 <b>Got it.</b> I’m downloading and reading the file…', { parse_mode: 'HTML' });
+    try {
+      return await withTyping(ctx, async () => {
+        const localPath = await downloadTelegramFile(ctx.api, fileId, fileName);
+        let extracted = '';
+        let summary = '';
+        if (fileType?.kind === 'image') {
+          summary = await summarizeImage(localPath, fileName, msg.caption || '');
+        } else {
+          extracted = await extractText(localPath, fileName);
+          summary = await summarizeText(extracted, msg.caption || '');
+        }
+        openDb().prepare(`
+          INSERT INTO uploaded_files (chat_id, telegram_file_id, file_name, file_type, extracted_text, summary)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).run(String(ctx.chat.id), fileId, fileName, fileType?.kind || 'image', extracted.slice(0, 20000), summary);
+        return sendLong(ctx, `📄 <b>File read: ${escapeHtml(fileName)}</b>\n${escapeHtml(summary)}`);
+      });
+    } catch (err) {
+      return sendLong(ctx, friendlyError(err));
     }
-    openDb().prepare(`
-      INSERT INTO uploaded_files (chat_id, telegram_file_id, file_name, file_type, extracted_text, summary)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(String(ctx.chat.id), fileId, fileName, fileType?.kind || 'image', extracted.slice(0, 20000), summary);
-    return sendLong(ctx, `<b>File read: ${escapeHtml(fileName)}</b>\n${escapeHtml(summary)}`);
   });
 
   bot.catch(err => {
@@ -123,7 +132,7 @@ async function summarizeText(text, caption) {
   const response = await chat(model, [
     { role: 'system', content: 'Summarize uploaded files for a GitHub agent. Keep it concise and say how it might be useful for GitHub/repo work.' },
     { role: 'user', content: `Caption: ${caption || 'none'}\n\nFile text:\n${text.slice(0, 12000)}` },
-  ], { maxTokens: 700 });
+  ], { maxTokens: 550 });
   return response;
 }
 

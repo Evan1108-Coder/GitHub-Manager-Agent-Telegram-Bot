@@ -35,38 +35,38 @@ function renderAudit(repo, findings) {
 }
 
 function renderStatsReport(summary) {
-  const lines = ['<b>GitHub Stats Report</b>'];
-  lines.push(`Total stars: ${summary.totalStars} (${delta(summary.starDelta)})`);
-  lines.push(`Total forks: ${summary.totalForks} (${delta(summary.forkDelta)})`);
+  const lines = ['📊 <b>GitHub Stats Report</b>'];
+  lines.push(`⭐ Total stars: ${summary.totalStars} (${delta(summary.starDelta)})`);
+  lines.push(`🍴 Total forks: ${summary.totalForks} (${delta(summary.forkDelta)})`);
   if (summary.topMovement?.length) {
-    lines.push('\n<b>Top movement</b>');
+    lines.push('\n📈 <b>Top movement</b>');
     summary.topMovement.slice(0, 5).forEach(item => {
       lines.push(`- ${escapeHtml(item.name)}: ${delta(item.starDelta)} stars`);
     });
   }
   if (summary.notes?.length) {
-    lines.push('\n<b>Notes</b>');
+    lines.push('\n🧾 <b>Notes</b>');
     summary.notes.slice(0, 4).forEach(note => lines.push(`- ${escapeHtml(note)}`));
   }
   return lines.join('\n');
 }
 
 function renderTrendDigest(data) {
-  const lines = ['<b>Morning Builder Trends</b>'];
+  const lines = ['🧭 <b>Morning Builder Trends</b>'];
   if (data.projects?.length) {
-    lines.push('\n<b>Projects worth noticing</b>');
+    lines.push('\n🔥 <b>Projects worth noticing</b>');
     data.projects.slice(0, 3).forEach((item, index) => {
       lines.push(`${index + 1}. ${link(item.title, item.url)} — ${escapeHtml(oneLine(item.why || item.description, 150))}`);
     });
   }
   if (data.ideas?.length) {
-    lines.push('\n<b>Project ideas</b>');
+    lines.push('\n💡 <b>Project ideas</b>');
     data.ideas.slice(0, 2).forEach((item, index) => {
       lines.push(`${index + 1}. <b>${escapeHtml(item.title)}</b> — ${escapeHtml(oneLine(item.summary, 150))}`);
     });
   }
   if (data.takeaways?.length) {
-    lines.push('\n<b>Takeaways for your repos</b>');
+    lines.push('\n🛠️ <b>Takeaways for your repos</b>');
     data.takeaways.slice(0, 3).forEach((item, index) => {
       lines.push(`${index + 1}. ${escapeHtml(oneLine(item, 180))}`);
     });

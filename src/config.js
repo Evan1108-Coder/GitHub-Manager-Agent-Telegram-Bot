@@ -28,6 +28,7 @@ function getConfig() {
     defaultTimezone: process.env.DEFAULT_TIMEZONE || 'UTC',
     defaultModel: process.env.DEFAULT_MODEL || '',
     notificationLevel: process.env.NOTIFICATION_LEVEL || 'normal',
+    llmTimeoutMs: Number(process.env.LLM_TIMEOUT_MS || 35000),
     enableDefaultJobs: bool(process.env.ENABLE_DEFAULT_JOBS, false),
     autoApplyLowRiskProfileUpdates: bool(process.env.AUTO_APPLY_LOW_RISK_PROFILE_UPDATES, false),
     autoCreateProfileBlocks: bool(process.env.AUTO_CREATE_PROFILE_BLOCKS, false),

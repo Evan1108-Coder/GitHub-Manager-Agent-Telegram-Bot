@@ -75,8 +75,19 @@ function getAvailableModels(config = getConfig()) {
 
 function chooseDefaultModel(config = getConfig()) {
   const available = getAvailableModels(config);
+  const runtimeModel = getRuntimeModelPreference();
+  if (runtimeModel && available.includes(runtimeModel)) return runtimeModel;
   if (config.defaultModel && available.includes(config.defaultModel)) return config.defaultModel;
   return rankByCost(available, DEFAULT_PRICING)[0] || null;
+}
+
+function getRuntimeModelPreference() {
+  try {
+    const { getSetting } = require('../db');
+    return getSetting('default_model', '');
+  } catch {
+    return '';
+  }
 }
 
 function supportsVision(model) {
@@ -93,7 +104,7 @@ async function callOpenAICompatible(provider, key, model, messages, options = {}
     response_format: options.json ? { type: 'json_object' } : undefined,
   }, {
     headers: { 'Content-Type': 'application/json', ...provider.authHeader(key) },
-    timeout: options.timeout || 120000,
+    timeout: options.timeout || getConfig().llmTimeoutMs,
   });
   return String(res.data.choices?.[0]?.message?.content || '').replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim();
 }
@@ -112,7 +123,7 @@ async function callAnthropic(key, model, messages, options = {}) {
       'x-api-key': key,
       'anthropic-version': '2023-06-01',
     },
-    timeout: options.timeout || 120000,
+    timeout: options.timeout || getConfig().llmTimeoutMs,
   });
   return String(res.data.content?.[0]?.text || '').trim();
 }
@@ -132,7 +143,7 @@ async function callGoogle(key, model, messages, options = {}) {
   };
   if (systemInstruction) body.systemInstruction = { parts: [{ text: systemInstruction.content }] };
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
-  const res = await axios.post(url, body, { headers: { 'Content-Type': 'application/json' }, timeout: options.timeout || 120000 });
+  const res = await axios.post(url, body, { headers: { 'Content-Type': 'application/json' }, timeout: options.timeout || getConfig().llmTimeoutMs });
   return String(res.data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
 }
 
@@ -186,7 +197,7 @@ async function chatWithVision(model, messages, imageBase64, mimeType, options = 
         'x-api-key': key,
         'anthropic-version': '2023-06-01',
       },
-      timeout: options.timeout || 120000,
+      timeout: options.timeout || getConfig().llmTimeoutMs,
     });
     return String(res.data.content?.[0]?.text || '').trim();
   }
@@ -206,7 +217,7 @@ async function chatWithVision(model, messages, imageBase64, mimeType, options = 
     };
     if (systemInstruction) body.systemInstruction = { parts: [{ text: systemInstruction.content }] };
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${activeModel}:generateContent?key=${key}`;
-    const res = await axios.post(url, body, { headers: { 'Content-Type': 'application/json' }, timeout: options.timeout || 120000 });
+    const res = await axios.post(url, body, { headers: { 'Content-Type': 'application/json' }, timeout: options.timeout || getConfig().llmTimeoutMs });
     return String(res.data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
   }
 
@@ -228,7 +239,7 @@ async function chatWithVision(model, messages, imageBase64, mimeType, options = 
     temperature: options.temperature ?? 0.3,
   }, {
     headers: { 'Content-Type': 'application/json', ...provider.authHeader(key) },
-    timeout: options.timeout || 120000,
+    timeout: options.timeout || getConfig().llmTimeoutMs,
   });
   return String(res.data.choices?.[0]?.message?.content || '').replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim();
 }
