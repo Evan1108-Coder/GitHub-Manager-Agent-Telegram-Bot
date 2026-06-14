@@ -103,7 +103,7 @@ function parseFlexibleSchedule(text, timezone = 'UTC', from = new Date()) {
   const compoundInterval = raw.match(/\bevery\s+(\d+)\s*(hour|hours|hr|hrs)\s*(?:and)?\s+(\d+)\s*(minute|minutes|min|mins)\b/);
   if (compoundInterval) {
     const minutes = Number(compoundInterval[1]) * 60 + Number(compoundInterval[3]);
-    return { type: 'interval', everyMinutes: minutes, timezone, nextRunAt: toIso(nextIntervalRun(minutes, from)) };
+    if (minutes >= 1) return { type: 'interval', everyMinutes: minutes, timezone, nextRunAt: toIso(nextIntervalRun(minutes, from)) };
   }
 
   const interval = raw.match(/\bevery\s+(\d+)\s*(minute|minutes|min|mins|hour|hours|hr|hrs|day|days)\b/);
@@ -111,7 +111,10 @@ function parseFlexibleSchedule(text, timezone = 'UTC', from = new Date()) {
     const amount = Number(interval[1]);
     const unit = interval[2];
     const minutes = unit.startsWith('hour') || unit.startsWith('hr') ? amount * 60 : unit.startsWith('day') ? amount * 1440 : amount;
-    return { type: 'interval', everyMinutes: minutes, timezone, nextRunAt: toIso(nextIntervalRun(minutes, from)) };
+    // Reject zero/negative intervals — they would reschedule for "now" every
+    // tick and hammer the scheduler. Fall through so the message is handled
+    // as a normal request instead of becoming a runaway job.
+    if (minutes >= 1) return { type: 'interval', everyMinutes: minutes, timezone, nextRunAt: toIso(nextIntervalRun(minutes, from)) };
   }
 
   const days = {

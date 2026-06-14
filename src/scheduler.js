@@ -68,7 +68,13 @@ async function runDueJobs(bot, executor, now = new Date()) {
     LIMIT 10
   `).all(toIso(now));
   for (const job of due) {
-    await runJob(job, bot, executor, now);
+    // Isolate each job: a failure in one due job must not stop the others from
+    // running this tick. runJob already records the error against the job_run.
+    try {
+      await runJob(job, bot, executor, now);
+    } catch (err) {
+      console.error(`[Scheduler] job #${job.id} failed:`, err.message);
+    }
   }
 }
 

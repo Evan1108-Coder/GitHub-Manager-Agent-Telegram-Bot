@@ -2,7 +2,7 @@ const fs = require('fs/promises');
 const path = require('path');
 const axios = require('axios');
 const mammoth = require('mammoth');
-const pdfParse = require('pdf-parse');
+const { PDFParse } = require('pdf-parse');
 const JSZip = require('jszip');
 const { getConfig } = require('./config');
 
@@ -47,8 +47,13 @@ async function extractText(filePath, fileName = filePath) {
     return ext === '.rtf' ? stripRtf(raw) : raw;
   }
   if (ext === '.pdf') {
-    const data = await pdfParse(await fs.readFile(filePath));
-    return data.text || '';
+    const parser = new PDFParse({ data: new Uint8Array(await fs.readFile(filePath)) });
+    try {
+      const result = await parser.getText();
+      return result.text || '';
+    } finally {
+      await parser.destroy?.();
+    }
   }
   if (ext === '.docx') {
     const result = await mammoth.extractRawText({ path: filePath });

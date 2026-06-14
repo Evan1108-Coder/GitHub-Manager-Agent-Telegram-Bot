@@ -141,7 +141,9 @@ function renderApprovalMessage(actionId, summary, payload, risk, diff) {
     `Risk: <b>${escapeHtml(risk.level)}</b> — ${escapeHtml(risk.reason)}`,
   ];
   if (payload.repo) lines.push(`Repo: <code>${escapeHtml(payload.repo)}</code>`);
-  if (diff) lines.push('', '<b>Preview</b>', `<pre>${escapeHtml(diff).slice(0, 2500)}</pre>`);
+  // Truncate the RAW diff first, then escape — slicing escaped HTML can cut an
+  // entity (e.g. "&lt;") in half and make Telegram reject the whole message.
+  if (diff) lines.push('', '<b>Preview</b>', `<pre>${escapeHtml(String(diff).slice(0, 2400))}</pre>`);
   return lines.join('\n');
 }
 
@@ -163,5 +165,6 @@ module.exports = {
   requestApproval,
   handleApprovalDecision,
   executeApprovedAction,
+  renderApprovalMessage,
   summarizePayload,
 };

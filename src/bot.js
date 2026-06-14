@@ -1,7 +1,7 @@
 const { Bot } = require('grammy');
 const { envStatus, getConfig } = require('./config');
 const { isSetupComplete, startSetup, currentQuestion, handleSetupAnswer } = require('./setup');
-const { sendLong, escapeHtml, oneLine } = require('./utils/format');
+const { sendLong, escapeHtml, oneLine, mdToHtml } = require('./utils/format');
 const { handleText, handleApprovalCallback } = require('./agent');
 const { seedDefaultJobs } = require('./scheduler');
 const { classifyFile, downloadTelegramFile, extractText, getSupportedExtensions, getImageBase64, getMimeType } = require('./files');
@@ -91,10 +91,13 @@ function createBot(token) {
           INSERT INTO uploaded_files (chat_id, telegram_file_id, file_name, file_type, extracted_text, summary)
           VALUES (?, ?, ?, ?, ?, ?)
         `).run(String(ctx.chat.id), fileId, fileName, fileType?.kind || 'image', extracted.slice(0, 20000), summary);
-        return sendLong(ctx, `📄 <b>File read: ${escapeHtml(fileName)}</b>\n${escapeHtml(summary)}`);
+        return sendLong(ctx, `📄 <b>File read: ${escapeHtml(fileName)}</b>\n${mdToHtml(summary)}`);
       });
     } catch (err) {
-      return sendLong(ctx, friendlyError(err));
+      const message = /xref|pdf|parse|invalid|corrupt|password|encrypt|unsupported file/i.test(err.message || '')
+        ? `📄 <b>I couldn’t read ${escapeHtml(fileName)}.</b>\nIt may be scanned, encrypted, or in a format I can’t parse yet. Try a text-based PDF, a .docx, or a .txt export.`
+        : friendlyError(err);
+      return sendLong(ctx, message);
     }
   });
 

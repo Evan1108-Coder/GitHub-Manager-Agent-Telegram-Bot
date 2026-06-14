@@ -70,6 +70,32 @@ test('planner blocks destructive operations', () => {
   assert.equal(parseGithubWriteRequest('add collaborator bob to example-user/repo').blocked, true);
 });
 
+test('planner blocks visibility changes regardless of word order', () => {
+  assert.equal(parseGithubWriteRequest('make repo example-user/repo private').blocked, true);
+  assert.equal(parseGithubWriteRequest('make example-user/repo private').blocked, true);
+  assert.equal(parseGithubWriteRequest('change example-user/repo to a public repo').blocked, true);
+  assert.equal(parseGithubWriteRequest('set example-user/repo visibility to private').blocked, true);
+});
+
+test('planner does not over-block benign uses of public/private', () => {
+  // "public"/"private" near a slug but about an issue/release is not a
+  // visibility change and must still parse normally.
+  const issue = parseGithubWriteRequest('create issue in example-user/repo titled "Make API public"');
+  assert.equal(issue.type, 'create_issue');
+});
+
+test('planner blocks destructive intent even without an explicit owner/repo slug', () => {
+  assert.equal(parseGithubWriteRequest('delete my repository').blocked, true);
+  assert.equal(parseGithubWriteRequest('transfer my repo').blocked, true);
+  assert.equal(parseGithubWriteRequest('make it private').blocked, true);
+});
+
+test('planner does not turn a URL into an issue title', () => {
+  const payload = parseGithubWriteRequest('create issue in example-user/repo: https://example.com/path:8080');
+  assert.equal(payload.type, 'create_issue');
+  assert.equal(payload.title, 'New issue');
+});
+
 test('planner parses read request', () => {
   const payload = parseGithubReadRequest('show open PRs in example-user/repo');
   assert.equal(payload.kind, 'list_prs');

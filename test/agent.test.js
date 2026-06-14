@@ -89,3 +89,19 @@ test('agent stores verbosity preference', async () => {
   await handleText(ctx, 'set verbosity to quick');
   assert.ok(ctx.replies[0].includes('Verbosity updated'));
 });
+
+test('the broad status catch-all does not shadow a more specific intent', async () => {
+  // "response time" + the word "status" must reach the telemetry handler, not
+  // the generic Bot Status screen (regression for the routing-precedence bug).
+  const ctx = fakeCtx();
+  await handleText(ctx, 'show me response time status');
+  const out = ctx.replies.join('\n');
+  assert.ok(out.includes('📈'), `expected telemetry reply, got: ${out}`);
+  assert.ok(!out.includes('Bot Status'));
+});
+
+test('plain status still falls back to the Bot Status screen', async () => {
+  const ctx = fakeCtx();
+  await handleText(ctx, 'status');
+  assert.ok(ctx.replies.join('\n').includes('Bot Status'));
+});

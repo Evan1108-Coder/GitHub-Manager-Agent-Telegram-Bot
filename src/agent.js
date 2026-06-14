@@ -5,7 +5,7 @@ const { auditRepoPresentation } = require('./github/audit');
 const { chat, chooseDefaultModel, getAvailableModels } = require('./llm/providers');
 const { createScheduledJob, listScheduledJobs } = require('./scheduler');
 const { parseFlexibleSchedule, shiftSchedule, computeNextRun } = require('./utils/time');
-const { escapeHtml, sendLong, oneLine } = require('./utils/format');
+const { escapeHtml, sendLong, oneLine, mdToHtml } = require('./utils/format');
 const { delayedProgress, withTyping, friendlyError } = require('./utils/ux');
 const { renderJob, renderAudit } = require('./renderers');
 const { buildTrendDigest, buildStatsReport, buildDailySummary, runProfileUpdate, auditOneRepo } = require('./jobs');
@@ -117,10 +117,6 @@ async function handleTextInner(ctx, text, context = {}) {
     return searchUploadedFiles(ctx, normalized);
   }
 
-  if (/settings|status|config|setup/i.test(normalized)) {
-    return showStatus(ctx);
-  }
-
   if (/telemetry|latency|slow replies|response time/i.test(normalized)) {
     return showTelemetry(ctx);
   }
@@ -134,7 +130,7 @@ async function handleTextInner(ctx, text, context = {}) {
     return withFriendlyFailure(ctx, () => withTyping(ctx, () => checkSecurityAlerts(ctx)));
   }
 
-  if (/trend|builder trend|morning trend/i.test(normalized)) {
+  if (/\btrends?\b|builder trend|morning trend/i.test(normalized)) {
     await reply(ctx, '🧭 <b>Got it.</b> Fetching trend sources and compressing them into a short builder digest…');
     return withFriendlyFailure(ctx, () => withTyping(ctx, async () => sendLong(ctx, await buildTrendDigest())));
   }
@@ -144,7 +140,7 @@ async function handleTextInner(ctx, text, context = {}) {
     return withFriendlyFailure(ctx, () => withTyping(ctx, async () => sendLong(ctx, await buildDailySummary())));
   }
 
-  if (/stats|stars|popularity|views|forks/i.test(normalized) && !/audit|readme/i.test(normalized)) {
+  if (/\b(stats|stars|popularity|views|forks)\b/i.test(normalized) && !/audit|readme/i.test(normalized)) {
     await reply(ctx, '📊 <b>I’m checking GitHub stats and stored snapshots…</b>');
     return withFriendlyFailure(ctx, () => withTyping(ctx, async () => sendLong(ctx, await buildStatsReport())));
   }
@@ -175,6 +171,13 @@ async function handleTextInner(ctx, text, context = {}) {
     return handleModelChange(ctx, normalized);
   }
 
+  // Broad status/settings catch-all runs LAST (just before the LLM fallback) so
+  // it can't shadow more specific intents like "github token status", "status of
+  // trends", or "config my stats" that also contain the word status/config.
+  if (/\b(settings|status|config|setup)\b/i.test(normalized)) {
+    return showStatus(ctx);
+  }
+
   return generalAnswer(ctx, normalized, context);
 }
 
@@ -192,6 +195,7 @@ async function generalAnswer(ctx, text, context = {}) {
     'You can explain, plan, and suggest GitHub actions, but public-facing writes need approval unless low-risk and controlled.',
     'If the user asks during setup-like discussion, answer then bring them back to the current task.',
     'Do not claim you performed an action unless a tool/result says it happened.',
+    'You have no callable tools or functions in this chat — never emit tool-call or function-call markup; just reply in plain prose.',
   ].join(' ');
   try {
     const response = await withTyping(ctx, () => chat(model, [
@@ -199,8 +203,12 @@ async function generalAnswer(ctx, text, context = {}) {
       { role: 'user', content: `User GitHub: ${config.githubUsername || getSetting('github_username', 'unknown')}\nContext: ${JSON.stringify(context).slice(0, 1200)}\nRecent chat: ${JSON.stringify(history).slice(0, 2500)}\nCurrent message: ${text}` },
     ], { maxTokens: 700 }));
     progress.stop();
+    const rendered = mdToHtml(response);
+    if (!rendered) {
+      return sendLong(ctx, '🤔 <b>I could not put together a useful reply just now.</b>\nTry rephrasing, or ask a GitHub-specific request like “show jobs”, “stats”, or “audit my repos”.');
+    }
     addConversation(ctx.chat.id, 'assistant', response);
-    return sendLong(ctx, `💬 ${escapeHtml(response)}`);
+    return sendLong(ctx, `💬 ${rendered}`);
   } catch (err) {
     progress.stop();
     return sendLong(ctx, friendlyError(err));

@@ -3,15 +3,15 @@ const { getSetting } = require('./db');
 
 function parseGithubWriteRequest(text) {
   const raw = String(text || '').trim();
+
+  // Destructive intent is checked BEFORE requiring a resolvable owner/repo so
+  // that phrasings without an explicit slug ("delete my repository", "make it
+  // private") still get an explicit block instead of falling through to the LLM.
+  const blockedReason = detectBlockedAction(raw);
+  if (blockedReason) return { blocked: true, reason: blockedReason };
+
   const repo = extractRepo(raw);
   if (!repo) return null;
-
-  if (/\b(delete|remove)\s+(repo|repository)\b/i.test(raw)) return { blocked: true, reason: 'Repository deletion is blocked by default.' };
-  if (/\btransfer\s+(repo|repository)\b/i.test(raw)) return { blocked: true, reason: 'Repository transfer is blocked by default.' };
-  if (/\b(change|make|set).*(private|public).*(repo|repository)\b/i.test(raw)) return { blocked: true, reason: 'Repository visibility changes are blocked by default.' };
-  if (/\b(delete|remove)\s+(branch)\b/i.test(raw)) return { blocked: true, reason: 'Branch deletion is blocked by default.' };
-  if (/\b(delete|remove)\s+(file|path)\b/i.test(raw)) return { blocked: true, reason: 'File deletion is blocked by default.' };
-  if (/\b(add|invite|remove).*(collaborator|member)\b/i.test(raw)) return { blocked: true, reason: 'Collaborator changes are blocked by default.' };
 
   const issue = parseCreateIssue(raw, repo);
   if (issue) return issue;
@@ -49,6 +49,30 @@ function parseGithubWriteRequest(text) {
   return null;
 }
 
+function detectBlockedAction(raw) {
+  if (/\b(delete|remove)\s+(the\s+|my\s+)?(repo|repository)\b/i.test(raw)) return 'Repository deletion is blocked by default.';
+  if (/\btransfer\s+(the\s+|my\s+|ownership\s+of\s+)?(repo|repository)\b/i.test(raw)) return 'Repository transfer is blocked by default.';
+  // Visibility changes: order-independent — catches "make repo X private",
+  // "make owner/repo private", "set it to public", etc. A bare owner/repo slug
+  // counts as the target, unless the sentence is clearly about a benign object
+  // (issue/release/etc.) that legitimately uses the words public/private.
+  const visibilityVerb = /\b(make|set|change|turn|switch|mark|convert|flip)\b/i.test(raw);
+  const visibilityWord = /\b(private|public)\b/i.test(raw);
+  const hasSlug = /\b[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\b/.test(raw);
+  // If the sentence is about a benign object that legitimately uses the words
+  // public/private (an issue title, release notes, a description, etc.), it is
+  // not a repo-visibility change — don't block it.
+  const benignObject = /\b(issue|issues|pr|prs|pull request|release|gist|page|comment|demo|api|endpoint|description|title|topic|topics|label|labels|name|body|readme|file)\b/i.test(raw);
+  const visibilityTarget = !benignObject && (hasSlug || /\b(repository|it|this|visibility)\b/i.test(raw));
+  if (visibilityVerb && visibilityWord && visibilityTarget) {
+    return 'Repository visibility changes are blocked by default.';
+  }
+  if (/\b(delete|remove)\s+(the\s+)?branch\b/i.test(raw)) return 'Branch deletion is blocked by default.';
+  if (/\b(delete|remove)\s+(the\s+)?(file|path)\b/i.test(raw)) return 'File deletion is blocked by default.';
+  if (/\b(add|invite|remove)\b[\s\S]*\b(collaborator|member)\b/i.test(raw)) return 'Collaborator changes are blocked by default.';
+  return null;
+}
+
 function parseGithubReadRequest(text) {
   const raw = String(text || '').trim();
   const repo = extractRepo(raw);
@@ -63,7 +87,10 @@ function parseGithubReadRequest(text) {
 function parseCreateIssue(raw, repo) {
   if (!/\b(create|open|draft)\s+(an?\s+)?issue\b/i.test(raw)) return null;
   if (/\b(last uploaded|uploaded file|from file|from this file)\b/i.test(raw)) return null;
-  const title = extractQuotedAfter(raw, /(?:title|titled|called|named)\s*/i) || extractAfterColon(raw) || 'New issue';
+  const colonTitle = extractAfterColon(raw);
+  const title = extractQuotedAfter(raw, /(?:title|titled|called|named)\s*/i)
+    || (colonTitle && !/https?:\/\//i.test(colonTitle) ? colonTitle : null)
+    || 'New issue';
   const body = extractQuotedAfter(raw, /(?:body|description|with)\s*/i) || '';
   return {
     type: 'create_issue',

@@ -41,6 +41,21 @@ const PROVIDERS = {
   },
 };
 
+// Reasoning/agentic models (MiniMax-M1 in particular) wrap answers in
+// <think>…</think> and sometimes emit tool-call markup
+// (<minimax:tool_call><invoke name=…><parameter …>) even when no tools are
+// offered. None of that should ever reach the user, so strip it centrally.
+function sanitizeAssistantText(text) {
+  let s = String(text ?? '');
+  s = s.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  s = s.replace(/<minimax:tool_call>[\s\S]*?<\/minimax:tool_call>/gi, '');
+  s = s.replace(/<minimax:tool_call>[\s\S]*$/i, '');
+  s = s.replace(/<invoke\b[\s\S]*?<\/invoke>/gi, '');
+  s = s.replace(/<invoke\b[\s\S]*$/i, '');
+  s = s.replace(/<\/?(?:think|minimax:tool_call|tool_call|invoke|parameter)\b[^>]*>/gi, '');
+  return s.trim();
+}
+
 const VISION_MODELS = new Set([
   'gpt-5.4-pro',
   'gpt-5.4-mini',
@@ -106,7 +121,7 @@ async function callOpenAICompatible(provider, key, model, messages, options = {}
     headers: { 'Content-Type': 'application/json', ...provider.authHeader(key) },
     timeout: options.timeout || getConfig().llmTimeoutMs,
   });
-  return String(res.data.choices?.[0]?.message?.content || '').replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim();
+  return sanitizeAssistantText(res.data.choices?.[0]?.message?.content);
 }
 
 async function callAnthropic(key, model, messages, options = {}) {
@@ -241,7 +256,7 @@ async function chatWithVision(model, messages, imageBase64, mimeType, options = 
     headers: { 'Content-Type': 'application/json', ...provider.authHeader(key) },
     timeout: options.timeout || getConfig().llmTimeoutMs,
   });
-  return String(res.data.choices?.[0]?.message?.content || '').replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim();
+  return sanitizeAssistantText(res.data.choices?.[0]?.message?.content);
 }
 
 module.exports = {
@@ -253,4 +268,5 @@ module.exports = {
   chat,
   chatJson,
   chatWithVision,
+  sanitizeAssistantText,
 };

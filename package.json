@@ -1,6 +1,6 @@
 {
   "name": "github-manager-agent-telegram-bot",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "A personal Telegram GitHub agent that keeps your repos, profile, docs, and project presence sharp through natural chat, smart low-noise monitoring, scheduled reminders, meaningful alerts, and approved GitHub actions.",
   "main": "src/index.js",
   "type": "commonjs",
@@ -31,7 +31,7 @@
     "jszip": "^3.10.1",
     "mammoth": "^1.8.0",
     "node-cron": "^4.2.1",
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "^2.4.5"
   },
   "engines": {
     "node": ">=22.5.0"

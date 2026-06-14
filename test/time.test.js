@@ -44,6 +44,11 @@ test('parses next weekday and weekly variants', () => {
   assert.equal(weekly.hour, 10);
 });
 
+test('rejects zero or negative interval schedules', () => {
+  assert.equal(parseFlexibleSchedule('every 0 minutes do something', 'UTC', new Date('2026-06-13T00:00:00Z')), null);
+  assert.equal(parseFlexibleSchedule('every 0 hours and 0 minutes check stars', 'UTC', new Date('2026-06-13T00:00:00Z')), null);
+});
+
 test('computes daily next run in the future', () => {
   const next = computeNextRun({ type: 'daily', hour: 6, minute: 30, timezone: 'Asia/Hong_Kong' }, new Date('2026-06-11T07:00:00Z'));
   assert.ok(new Date(next) > new Date('2026-06-11T07:00:00Z'));
