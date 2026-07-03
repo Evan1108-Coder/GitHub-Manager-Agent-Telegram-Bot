@@ -289,6 +289,43 @@ class GitHubClient {
     const [owner, repo] = splitRepo(fullName);
     return this.get(`/repos/${owner}/${repo}/dependabot/alerts`, { per_page: 30 });
   }
+
+  // --- Danger-zone repo settings (only reached after the env gate + explicit
+  // per-action confirmation in approvals.js). ---
+
+  async setVisibility(fullName, visibility) {
+    // visibility: 'public' | 'private'. Send both fields for API-version safety.
+    return this.updateRepo(fullName, { visibility, private: visibility === 'private' });
+  }
+
+  async setArchived(fullName, archived) {
+    return this.updateRepo(fullName, { archived: Boolean(archived) });
+  }
+
+  async addCollaborator(fullName, username, permission = 'push') {
+    const [owner, repo] = splitRepo(fullName);
+    return this.put(`/repos/${owner}/${repo}/collaborators/${encodeURIComponent(username)}`, { permission });
+  }
+
+  async removeCollaborator(fullName, username) {
+    const [owner, repo] = splitRepo(fullName);
+    return this.delete(`/repos/${owner}/${repo}/collaborators/${encodeURIComponent(username)}`);
+  }
+
+  async deleteRepo(fullName) {
+    const [owner, repo] = splitRepo(fullName);
+    return this.delete(`/repos/${owner}/${repo}`);
+  }
+
+  async transferRepo(fullName, newOwner, teamIds) {
+    const [owner, repo] = splitRepo(fullName);
+    return this.post(`/repos/${owner}/${repo}/transfer`, { new_owner: newOwner, team_ids: teamIds });
+  }
+
+  async deleteBranch(fullName, branch) {
+    const [owner, repo] = splitRepo(fullName);
+    return this.delete(`/repos/${owner}/${repo}/git/refs/heads/${encodePath(branch)}`);
+  }
 }
 
 function splitRepo(fullName) {

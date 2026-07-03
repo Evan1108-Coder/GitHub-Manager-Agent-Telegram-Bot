@@ -14,9 +14,11 @@ test('planner parses issue creation', () => {
   assert.equal(payload.body, 'Add setup section');
 });
 
-test('planner blocks repo deletion', () => {
+test('planner parses repo deletion as a gated destructive action', () => {
   const payload = parseGithubWriteRequest('delete repository example-user/repo');
-  assert.equal(payload.blocked, true);
+  assert.equal(payload.dangerous, true);
+  assert.equal(payload.type, 'delete_repo');
+  assert.equal(payload.repo, 'example-user/repo');
 });
 
 test('planner parses repo description update', () => {
@@ -64,17 +66,43 @@ test('planner parses branch, PR, release, comment, and workflow actions', () => 
   assert.equal(parseGithubWriteRequest('rerun workflow run 123 in example-user/repo').type, 'rerun_workflow');
 });
 
-test('planner blocks destructive operations', () => {
-  assert.equal(parseGithubWriteRequest('delete branch old in example-user/repo').blocked, true);
-  assert.equal(parseGithubWriteRequest('delete file README.md in example-user/repo').blocked, true);
-  assert.equal(parseGithubWriteRequest('add collaborator bob to example-user/repo').blocked, true);
+test('planner parses destructive operations into gated payloads', () => {
+  const branch = parseGithubWriteRequest('delete branch old in example-user/repo');
+  assert.equal(branch.dangerous, true);
+  assert.equal(branch.type, 'delete_branch');
+  assert.equal(branch.branch, 'old');
+
+  const file = parseGithubWriteRequest('delete file README.md in example-user/repo');
+  assert.equal(file.dangerous, true);
+  assert.equal(file.type, 'delete_file');
+  assert.equal(file.path, 'README.md');
+
+  const collab = parseGithubWriteRequest('add collaborator bob to example-user/repo');
+  assert.equal(collab.dangerous, true);
+  assert.equal(collab.type, 'add_collaborator');
+  assert.equal(collab.username, 'bob');
+
+  const remove = parseGithubWriteRequest('remove collaborator bob from example-user/repo');
+  assert.equal(remove.dangerous, true);
+  assert.equal(remove.type, 'remove_collaborator');
+  assert.equal(remove.username, 'bob');
+
+  const transfer = parseGithubWriteRequest('transfer example-user/repo to neworg');
+  assert.equal(transfer.dangerous, true);
+  assert.equal(transfer.type, 'transfer_repo');
+  assert.equal(transfer.newOwner, 'neworg');
 });
 
-test('planner blocks visibility changes regardless of word order', () => {
-  assert.equal(parseGithubWriteRequest('make repo example-user/repo private').blocked, true);
-  assert.equal(parseGithubWriteRequest('make example-user/repo private').blocked, true);
-  assert.equal(parseGithubWriteRequest('change example-user/repo to a public repo').blocked, true);
-  assert.equal(parseGithubWriteRequest('set example-user/repo visibility to private').blocked, true);
+test('planner parses visibility changes regardless of word order', () => {
+  const a = parseGithubWriteRequest('make repo example-user/repo private');
+  assert.equal(a.dangerous, true);
+  assert.equal(a.type, 'change_visibility');
+  assert.equal(a.visibility, 'private');
+  assert.equal(a.repo, 'example-user/repo');
+
+  assert.equal(parseGithubWriteRequest('make example-user/repo private').type, 'change_visibility');
+  assert.equal(parseGithubWriteRequest('change example-user/repo to a public repo').visibility, 'public');
+  assert.equal(parseGithubWriteRequest('set example-user/repo visibility to private').type, 'change_visibility');
 });
 
 test('planner does not over-block benign uses of public/private', () => {
@@ -84,10 +112,20 @@ test('planner does not over-block benign uses of public/private', () => {
   assert.equal(issue.type, 'create_issue');
 });
 
-test('planner blocks destructive intent even without an explicit owner/repo slug', () => {
-  assert.equal(parseGithubWriteRequest('delete my repository').blocked, true);
-  assert.equal(parseGithubWriteRequest('transfer my repo').blocked, true);
-  assert.equal(parseGithubWriteRequest('make it private').blocked, true);
+test('planner recognises destructive intent even without an explicit owner/repo slug', () => {
+  const del = parseGithubWriteRequest('delete my repository');
+  assert.equal(del.dangerous, true);
+  assert.equal(del.type, 'delete_repo');
+  assert.equal(del.repo, null);
+
+  const transfer = parseGithubWriteRequest('transfer my repo');
+  assert.equal(transfer.dangerous, true);
+  assert.equal(transfer.type, 'transfer_repo');
+
+  const vis = parseGithubWriteRequest('make it private');
+  assert.equal(vis.dangerous, true);
+  assert.equal(vis.type, 'change_visibility');
+  assert.equal(vis.visibility, 'private');
 });
 
 test('planner does not turn a URL into an issue title', () => {

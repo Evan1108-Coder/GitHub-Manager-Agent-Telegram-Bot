@@ -274,6 +274,12 @@ async function handleModelChange(ctx, text) {
 }
 
 async function prepareGithubWrite(ctx, request) {
+  // Danger-zone actions (visibility, deletion, transfer, collaborators, archive)
+  // flow straight into the approval gate, which refuses when disabled by default
+  // and otherwise requires an explicit confirmation every time.
+  if (request.dangerous) {
+    return requestApproval(ctx, request);
+  }
   if (request.blocked) {
     return reply(ctx, `🛑 <b>Blocked.</b>\n${escapeHtml(request.reason)}`);
   }

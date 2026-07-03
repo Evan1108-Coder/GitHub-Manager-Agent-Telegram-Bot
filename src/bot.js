@@ -5,7 +5,7 @@ const { sendLong, escapeHtml, oneLine, mdToHtml } = require('./utils/format');
 const { handleText, handleApprovalCallback } = require('./agent');
 const { seedDefaultJobs } = require('./scheduler');
 const { classifyFile, downloadTelegramFile, extractText, getSupportedExtensions, getImageBase64, getMimeType } = require('./files');
-const { openDb } = require('./db');
+const { openDb, getSetting, setSetting } = require('./db');
 const { chooseDefaultModel, supportsVision, chat, chatWithVision } = require('./llm/providers');
 const { withTyping, friendlyError } = require('./utils/ux');
 const { checkForUpdate, applyUpdate } = require('./update');
@@ -16,6 +16,15 @@ const PM2_NAME = process.env.PM2_PROCESS_NAME || 'github-manager-bot';
 
 function createBot(token) {
   const bot = new Bot(token);
+
+  // Learn where to deliver scheduled reports: the first time the owner DMs the
+  // bot, remember that private chat id. This is what makes scheduled jobs work
+  // without the owner having to hand-set TELEGRAM_CHAT_ID (and it never captures
+  // a group, so noisy chats can't hijack delivery).
+  bot.use(async (ctx, next) => {
+    captureOwnerChat(ctx);
+    return next();
+  });
 
   bot.command('start', async ctx => {
     if (!isSetupComplete()) {
@@ -179,6 +188,21 @@ function createBot(token) {
   });
 
   return bot;
+}
+
+function captureOwnerChat(ctx) {
+  try {
+    const chat = ctx.chat;
+    const from = ctx.from;
+    if (!chat || chat.type !== 'private' || !from || from.is_bot) return;
+    // Lock to the first human who DMs the bot (the owner). An explicit
+    // TELEGRAM_CHAT_ID env override still wins at delivery time.
+    if (!getSetting('owner_chat_id', null)) {
+      setSetting('owner_chat_id', String(chat.id));
+    }
+  } catch {
+    // Never let capture break message handling.
+  }
 }
 
 function buildMessageContext(ctx) {

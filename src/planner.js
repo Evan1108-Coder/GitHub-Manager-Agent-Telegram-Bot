@@ -4,13 +4,16 @@ const { getSetting } = require('./db');
 function parseGithubWriteRequest(text) {
   const raw = String(text || '').trim();
 
-  // Destructive intent is checked BEFORE requiring a resolvable owner/repo so
-  // that phrasings without an explicit slug ("delete my repository", "make it
-  // private") still get an explicit block instead of falling through to the LLM.
-  const blockedReason = detectBlockedAction(raw);
-  if (blockedReason) return { blocked: true, reason: blockedReason };
-
   const repo = extractRepo(raw);
+
+  // Destructive intent is parsed BEFORE requiring a resolvable owner/repo so that
+  // phrasings without an explicit slug ("delete my repository", "make it
+  // private") still surface as a gated destructive action. These no longer
+  // hard-block here — they return a payload that the security gate + approval
+  // flow decide on (blocked-by-default, or confirmed when explicitly enabled).
+  const dangerous = parseDangerousAction(raw, repo);
+  if (dangerous) return dangerous;
+
   if (!repo) return null;
 
   const issue = parseCreateIssue(raw, repo);
@@ -49,27 +52,66 @@ function parseGithubWriteRequest(text) {
   return null;
 }
 
-function detectBlockedAction(raw) {
-  if (/\b(delete|remove)\s+(the\s+|my\s+)?(repo|repository)\b/i.test(raw)) return 'Repository deletion is blocked by default.';
-  if (/\btransfer\s+(the\s+|my\s+|ownership\s+of\s+)?(repo|repository)\b/i.test(raw)) return 'Repository transfer is blocked by default.';
-  // Visibility changes: order-independent — catches "make repo X private",
-  // "make owner/repo private", "set it to public", etc. A bare owner/repo slug
-  // counts as the target, unless the sentence is clearly about a benign object
-  // (issue/release/etc.) that legitimately uses the words public/private.
-  const visibilityVerb = /\b(make|set|change|turn|switch|mark|convert|flip)\b/i.test(raw);
-  const visibilityWord = /\b(private|public)\b/i.test(raw);
-  const hasSlug = /\b[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\b/.test(raw);
-  // If the sentence is about a benign object that legitimately uses the words
-  // public/private (an issue title, release notes, a description, etc.), it is
-  // not a repo-visibility change — don't block it.
-  const benignObject = /\b(issue|issues|pr|prs|pull request|release|gist|page|comment|demo|api|endpoint|description|title|topic|topics|label|labels|name|body|readme|file)\b/i.test(raw);
-  const visibilityTarget = !benignObject && (hasSlug || /\b(repository|it|this|visibility)\b/i.test(raw));
-  if (visibilityVerb && visibilityWord && visibilityTarget) {
-    return 'Repository visibility changes are blocked by default.';
+// Parse danger-zone intent into a concrete action payload (marked `dangerous`).
+// The env gate + approval flow (not the planner) decide whether it is blocked or
+// confirmed, so these are recognised even without an explicit owner/repo slug.
+function parseDangerousAction(raw, repo) {
+  if (/\b(delete|remove|destroy)\s+(the\s+|my\s+|this\s+)?(repo|repository)\b/i.test(raw)) {
+    return { dangerous: true, type: 'delete_repo', repo };
   }
-  if (/\b(delete|remove)\s+(the\s+)?branch\b/i.test(raw)) return 'Branch deletion is blocked by default.';
-  if (/\b(delete|remove)\s+(the\s+)?(file|path)\b/i.test(raw)) return 'File deletion is blocked by default.';
-  if (/\b(add|invite|remove)\b[\s\S]*\b(collaborator|member)\b/i.test(raw)) return 'Collaborator changes are blocked by default.';
+  if (/\btransfer\s+(the\s+|my\s+|this\s+|ownership\s+of\s+)?(repo|repository|it)\b/i.test(raw)
+    || /\btransfer\s+[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\b/i.test(raw)) {
+    const newOwner = raw.match(/\bto\s+@?([A-Za-z0-9][A-Za-z0-9-]*)\b/i)?.[1] || null;
+    return { dangerous: true, type: 'transfer_repo', repo, newOwner };
+  }
+
+  // Visibility: order-independent — "make repo X private", "make owner/repo
+  // public", "set it to private". A bare slug or a repo pronoun is the target,
+  // unless the sentence is clearly about a benign object (issue/release/etc.)
+  // that legitimately uses the words public/private.
+  const visibilityVerb = /\b(make|set|change|turn|switch|mark|convert|flip)\b/i.test(raw);
+  const visibilityMatch = raw.match(/\b(private|public)\b/i);
+  const hasSlug = /\b[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\b/.test(raw);
+  const benignObject = /\b(issue|issues|pr|prs|pull request|release|gist|page|comment|demo|api|endpoint|description|title|topic|topics|label|labels|name|body|readme|file)\b/i.test(raw);
+  const visibilityTarget = !benignObject && (hasSlug || /\b(repository|repo|it|this|visibility)\b/i.test(raw));
+  if (visibilityVerb && visibilityMatch && visibilityTarget) {
+    return { dangerous: true, type: 'change_visibility', repo, visibility: visibilityMatch[1].toLowerCase() };
+  }
+
+  if (/\bunarchive\b/i.test(raw) && !benignObject) {
+    return { dangerous: true, type: 'unarchive_repo', repo };
+  }
+  if (/\barchive\b/i.test(raw) && /\b(repo|repository|it|this)\b/i.test(raw) && !benignObject) {
+    return { dangerous: true, type: 'archive_repo', repo };
+  }
+
+  if (/\b(delete|remove)\s+(the\s+)?branch\b/i.test(raw)) {
+    const branch = raw.match(/\bbranch\s+([A-Za-z0-9._/-]+)/i)?.[1] || null;
+    return { dangerous: true, type: 'delete_branch', repo, branch };
+  }
+  if (/\b(delete|remove)\s+(the\s+)?(file|path)\b/i.test(raw)) {
+    return { dangerous: true, type: 'delete_file', repo, path: extractPath(raw) };
+  }
+
+  if (/\b(add|invite)\b[\s\S]*\b(collaborator|member)\b/i.test(raw)
+    || /\b(collaborator|member)\b[\s\S]*\b(add|invite)\b/i.test(raw)) {
+    const username = raw.match(/\b(?:add|invite)\s+(?:collaborator\s+|member\s+)?@?([A-Za-z0-9][A-Za-z0-9-]*)\b/i)?.[1]
+      || raw.match(/@([A-Za-z0-9][A-Za-z0-9-]*)/)?.[1]
+      || null;
+    const permission = /\badmin\b/i.test(raw) ? 'admin'
+      : /\bmaintain\b/i.test(raw) ? 'maintain'
+        : /\b(read|pull|view)\b/i.test(raw) ? 'pull'
+          : 'push';
+    return { dangerous: true, type: 'add_collaborator', repo, username, permission };
+  }
+  if (/\b(remove|revoke|delete|kick)\b[\s\S]*\b(collaborator|member)\b/i.test(raw)
+    || /\b(collaborator|member)\b[\s\S]*\b(remove|revoke|delete|kick)\b/i.test(raw)) {
+    const username = raw.match(/\b(?:remove|revoke|delete|kick)\s+(?:collaborator\s+|member\s+)?@?([A-Za-z0-9][A-Za-z0-9-]*)\b/i)?.[1]
+      || raw.match(/@([A-Za-z0-9][A-Za-z0-9-]*)/)?.[1]
+      || null;
+    return { dangerous: true, type: 'remove_collaborator', repo, username };
+  }
+
   return null;
 }
 
@@ -278,5 +320,6 @@ function extractLabels(raw) {
 module.exports = {
   parseGithubWriteRequest,
   parseGithubReadRequest,
+  parseDangerousAction,
   extractRepo,
 };

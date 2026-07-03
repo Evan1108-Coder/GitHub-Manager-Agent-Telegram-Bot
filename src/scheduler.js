@@ -55,6 +55,13 @@ function seedDefaultJobs() {
 
 function startScheduler(bot, executor) {
   seedDefaultJobs();
+  // Catch up immediately on startup. Because each job's next_run_at is persisted
+  // in the database, a device that was asleep or off delivers whatever it missed
+  // as soon as it comes back online — the "first time the device is opened the
+  // new day" case — instead of waiting for the next minute tick or losing the
+  // run entirely. Each missed occurrence collapses to a single catch-up run,
+  // then reschedules forward.
+  runDueJobs(bot, executor).catch(err => console.error('[Scheduler] startup catch-up failed:', err.message));
   cron.schedule('* * * * *', () => {
     runDueJobs(bot, executor).catch(err => console.error('[Scheduler] run failed:', err.message));
   });

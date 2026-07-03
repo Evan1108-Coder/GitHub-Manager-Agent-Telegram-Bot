@@ -1,5 +1,5 @@
 const { getConfig } = require('./config');
-const { openDb, getSetting } = require('./db');
+const { openDb, getSetting, setSetting } = require('./db');
 const { GitHubClient } = require('./github/client');
 const { auditRepoPresentation, suspiciousCommitMessages } = require('./github/audit');
 const { chatJson, chat, chooseDefaultModel } = require('./llm/providers');
@@ -7,11 +7,40 @@ const { fetchAllTrends } = require('./trends/sources');
 const { sendLong, escapeHtml, oneLine } = require('./utils/format');
 const { renderTrendDigest, renderStatsReport, renderAudit } = require('./renderers');
 
+// Where scheduled reports get delivered. Preference order:
+//   1. TELEGRAM_CHAT_ID env override — but only if it's a real numeric chat id
+//      (guards against pasting a bot token like "7529...:AAF..." by mistake).
+//   2. The owner chat id auto-captured the first time the owner DMs the bot.
+//   3. Derived from the most recent conversation, then remembered.
+// Returns null if the bot has never been messaged, so the caller can tell the
+// user to DM it once.
+function isNumericChatId(value) {
+  return value !== undefined && value !== null && /^-?\d+$/.test(String(value).trim());
+}
+
+function resolveOwnerChatId(config = getConfig()) {
+  const envId = String(config.telegramChatId || '').trim();
+  if (isNumericChatId(envId)) return envId;
+
+  const saved = getSetting('owner_chat_id', null);
+  if (isNumericChatId(saved)) return String(saved).trim();
+
+  const row = openDb().prepare('SELECT chat_id FROM conversations ORDER BY created_at DESC, rowid DESC LIMIT 1').get();
+  if (row && isNumericChatId(row.chat_id)) {
+    const id = String(row.chat_id).trim();
+    setSetting('owner_chat_id', id);
+    return id;
+  }
+  return null;
+}
+
 async function executeJob(job, bot) {
   const plan = JSON.parse(job.plan_json);
   const config = getConfig();
-  const chatId = config.telegramChatId;
-  if (!chatId) throw new Error('TELEGRAM_CHAT_ID is not set.');
+  const chatId = resolveOwnerChatId(config);
+  if (!chatId) {
+    throw new Error('No delivery chat yet — DM the bot once (any message) so it can learn where to send scheduled reports, or set TELEGRAM_CHAT_ID to your numeric chat id.');
+  }
   if (plan.kind === 'trend_digest') return sendLong(bot, chatId, await buildTrendDigest());
   if (plan.kind === 'profile_update') return sendLong(bot, chatId, await runProfileUpdate());
   if (plan.kind === 'daily_summary') return sendLong(bot, chatId, await buildDailySummary());
@@ -322,6 +351,7 @@ async function auditOneRepo(repoName) {
 
 module.exports = {
   executeJob,
+  resolveOwnerChatId,
   buildTrendDigest,
   buildStatsReport,
   buildDailySummary,
