@@ -2,8 +2,9 @@ const { Bot } = require('grammy');
 const { envStatus, getConfig } = require('./config');
 const { isSetupComplete, startSetup, currentQuestion, handleSetupAnswer } = require('./setup');
 const { sendLong, escapeHtml, oneLine, mdToHtml } = require('./utils/format');
-const { handleText, handleApprovalCallback } = require('./agent');
+const { handleText, handleApprovalCallback, handleWatchCallback } = require('./agent');
 const { seedDefaultJobs } = require('./scheduler');
+const { getWatchManager } = require('./watch-setup');
 const { classifyFile, downloadTelegramFile, extractText, getSupportedExtensions, getImageBase64, getMimeType } = require('./files');
 const { openDb, getSetting, setSetting } = require('./db');
 const { chooseDefaultModel, supportsVision, chat, chatWithVision } = require('./llm/providers');
@@ -54,6 +55,7 @@ function createBot(token) {
   bot.command('reset_setup', ctx => handleText(ctx, 'reset setup'));
   bot.command('models', ctx => handleText(ctx, 'models'));
   bot.command('jobs', ctx => handleText(ctx, 'jobs'));
+  bot.command('watches', ctx => handleText(ctx, 'watches'));
 
   let updateInProgress = false;
   bot.command('update', async ctx => {
@@ -124,7 +126,9 @@ function createBot(token) {
   });
 
   bot.on('callback_query:data', async ctx => {
-    if ((ctx.callbackQuery.data || '').startsWith('approval:')) return handleApprovalCallback(ctx);
+    const data = ctx.callbackQuery.data || '';
+    if (data.startsWith('approval:')) return handleApprovalCallback(ctx);
+    if (data.startsWith('watch:')) return handleWatchCallback(ctx);
     return ctx.answerCallbackQuery();
   });
 
@@ -186,6 +190,17 @@ function createBot(token) {
   bot.catch(err => {
     console.error('[Bot] Error:', err.error?.message || err.message);
   });
+
+  // Bring the opt-in background watches back after a restart. Any watch whose
+  // deadline passed while the bot was down is closed out (and the user told),
+  // so nothing is silently lost — and none of this blocks startup.
+  try {
+    const wm = getWatchManager(bot);
+    const { resumed } = wm.resumeWatches();
+    if (resumed) console.log(`[Watch] Resumed ${resumed} active watch${resumed === 1 ? '' : 'es'}.`);
+  } catch (err) {
+    console.error('[Watch] resume failed:', err.message);
+  }
 
   return bot;
 }

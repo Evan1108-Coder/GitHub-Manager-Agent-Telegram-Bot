@@ -7,11 +7,15 @@ const { createScheduledJob, listScheduledJobs } = require('./scheduler');
 const { parseFlexibleSchedule, shiftSchedule, computeNextRun } = require('./utils/time');
 const { escapeHtml, sendLong, oneLine, mdToHtml } = require('./utils/format');
 const { delayedProgress, withTyping, friendlyError } = require('./utils/ux');
+const { classifyComplexity, StagedStatus, STAGES } = require('./utils/staged');
+const { runWithDeadline, DeadlineError, LIMITS } = require('./utils/guard');
 const { renderJob, renderAudit } = require('./renderers');
 const { buildTrendDigest, buildStatsReport, buildDailySummary, runProfileUpdate, auditOneRepo } = require('./jobs');
 const { parseGithubWriteRequest, parseGithubReadRequest } = require('./planner');
 const { requestApproval, handleApprovalDecision } = require('./approvals');
 const { replaceLine, textDiff } = require('./utils/diff');
+const { getWatchManager, parseWatchIntent } = require('./watch-setup');
+const { InlineKeyboard } = require('grammy');
 
 async function handleText(ctx, text, context = {}) {
   const started = Date.now();
@@ -167,6 +171,22 @@ async function handleTextInner(ctx, text, context = {}) {
     return withFriendlyFailure(ctx, () => withTyping(ctx, () => auditRecentRepos(ctx)));
   }
 
+  if (/^(watches|show watches|list watches|\/watches)$/i.test(normalized) || /what.*watching|am i watching/i.test(normalized)) {
+    return showWatches(ctx);
+  }
+
+  if (/\b(stop|cancel)\s+watch(?:ing)?\s*#?(\d+)/i.test(normalized)) {
+    const m = normalized.match(/#?(\d+)/);
+    return stopWatchById(ctx, m ? Number(m[1]) : null);
+  }
+
+  // A "watch/monitor X" request — we OFFER to watch (opt-in), never auto-start.
+  const watchIntent = parseWatchIntent(normalized, getSetting('github_username', getConfig().githubUsername) ? null : null) ||
+    parseWatchIntent(normalized, extractDefaultRepo(normalized));
+  if (watchIntent) {
+    return offerWatch(ctx, watchIntent);
+  }
+
   if (/switch.*model|use .*model|default model|change model/i.test(normalized)) {
     return handleModelChange(ctx, normalized);
   }
@@ -186,7 +206,14 @@ async function generalAnswer(ctx, text, context = {}) {
   if (!model) {
     return reply(ctx, '🔑 <b>No model is available yet.</b>\nSet at least one model API key in <code>.env</code>. For now, try GitHub-specific requests like “show jobs”, “stats”, or “audit my repos”.');
   }
-  const progress = delayedProgress(ctx, '🧠 <b>I’m thinking through that now…</b>\nIf this takes too long, I’ll stop instead of freezing the chat.', 900);
+
+  // Feature 1 — complexity-gated status. A hello / thanks / short question gets
+  // an instant answer with NO status line; only a real request shows a staged,
+  // edit-in-place trail (one message, updated through thinking → answer).
+  const { complex } = classifyComplexity(text, context.complexityHint);
+  const staged = complex ? new StagedStatus(ctx) : null;
+  if (staged) await staged.stage(STAGES.thinking);
+
   const history = getConversation(ctx.chat.id, 8);
   const config = getConfig();
   const system = [
@@ -198,21 +225,112 @@ async function generalAnswer(ctx, text, context = {}) {
     'You have no callable tools or functions in this chat — never emit tool-call or function-call markup; just reply in plain prose.',
   ].join(' ');
   try {
-    const response = await withTyping(ctx, () => chat(model, [
-      { role: 'system', content: system },
-      { role: 'user', content: `User GitHub: ${config.githubUsername || getSetting('github_username', 'unknown')}\nContext: ${JSON.stringify(context).slice(0, 1200)}\nRecent chat: ${JSON.stringify(history).slice(0, 2500)}\nCurrent message: ${text}` },
-    ], { maxTokens: 700 }));
-    progress.stop();
+    // Feature 2 — hard wall-clock deadline around the model call. The escape is a
+    // system-clock timer, so a hung provider can never freeze the chat: it ends
+    // as a friendly "took too long" instead of waiting forever.
+    const budgetMs = (config.llmTimeoutMs || 35000) + 5000;
+    const response = await runWithDeadline(
+      () => withTyping(ctx, () => chat(model, [
+        { role: 'system', content: system },
+        { role: 'user', content: `User GitHub: ${config.githubUsername || getSetting('github_username', 'unknown')}\nContext: ${JSON.stringify(context).slice(0, 1200)}\nRecent chat: ${JSON.stringify(history).slice(0, 2500)}\nCurrent message: ${text}` },
+      ], { maxTokens: 700 })),
+      budgetMs,
+      { label: 'model reply' }
+    );
     const rendered = mdToHtml(response);
     if (!rendered) {
+      if (staged) return staged.cant('I could not put together a useful reply just now.', 'Try rephrasing, or ask a GitHub-specific request like “show jobs”, “stats”, or “audit my repos”.');
       return sendLong(ctx, '🤔 <b>I could not put together a useful reply just now.</b>\nTry rephrasing, or ask a GitHub-specific request like “show jobs”, “stats”, or “audit my repos”.');
     }
     addConversation(ctx.chat.id, 'assistant', response);
+    if (staged) await staged.done();
     return sendLong(ctx, `💬 ${rendered}`);
   } catch (err) {
-    progress.stop();
+    if (err instanceof DeadlineError) {
+      if (staged) return staged.tooLong('The model took longer than its time budget.');
+      return sendLong(ctx, '⏱️ <b>That took too long.</b>\nI stopped waiting so the chat does not freeze. Try again, use a faster model, or ask for a smaller check.');
+    }
+    if (staged) return staged.cant(friendlyError(err).replace(/<[^>]+>/g, ''));
     return sendLong(ctx, friendlyError(err));
   }
+}
+
+// --- Opt-in background watches (Feature 2) -----------------------------------
+
+// Pull a "owner/repo" out of the message if present (used to default the watch
+// target). Falls back to null so parseWatchIntent can decide there's no target.
+function extractDefaultRepo(text) {
+  const m = String(text || '').match(/([\w.-]+\/[\w.-]+)/);
+  return m ? m[1] : null;
+}
+
+// OFFER to watch — this is the opt-in gate. We show the current state and ask;
+// the background watch only starts if the user taps "Yes, keep watching".
+async function offerWatch(ctx, intent) {
+  const token = `${intent.kind}:${Buffer.from(JSON.stringify({ p: intent.params, l: intent.label })).toString('base64url').slice(0, 3500)}`;
+  const keyboard = new InlineKeyboard()
+    .text('👀 Yes, keep watching', `watch:start:${token}`)
+    .text('❌ No thanks', 'watch:decline');
+  return ctx.reply(
+    `⏳ <b>Not done yet.</b>\nI can keep an eye on ${escapeHtml(intent.label)} in the background and ping you the moment it happens — you can keep chatting meanwhile. Want me to?`,
+    { parse_mode: 'HTML', reply_markup: keyboard }
+  );
+}
+
+async function showWatches(ctx) {
+  const wm = getWatchManager();
+  const rows = wm.listWatches(ctx.chat.id);
+  if (!rows.length) return reply(ctx, '👀 <b>No watches.</b>\nAsk me to “watch PR #12 in owner/repo” and I’ll offer to keep an eye on it.');
+  const lines = ['👀 <b>Watches</b>'];
+  for (const r of rows) {
+    const icon = r.status === 'active' ? '🟢' : r.status === 'fired' ? '✅' : r.status === 'timed_out' ? '⏳' : r.status === 'stopped' ? '⏹️' : '⚪';
+    lines.push(`${icon} #${r.id} — ${escapeHtml(r.label)} <i>(${escapeHtml(r.status)}, ${r.polls_done} check${r.polls_done === 1 ? '' : 's'})</i>`);
+  }
+  lines.push('\nStop one with “stop watch #<id>”.');
+  return sendLong(ctx, lines.join('\n'));
+}
+
+async function stopWatchById(ctx, id) {
+  if (!id) return reply(ctx, '⚠️ Which watch? Try “stop watch #3”.');
+  const wm = getWatchManager();
+  wm.stopWatch(id);
+  return reply(ctx, `⏹️ <b>Stopped watch #${id}.</b>`);
+}
+
+// Called from bot.js for callback_query data starting with "watch:".
+async function handleWatchCallback(ctx) {
+  const data = ctx.callbackQuery?.data || '';
+  const [, action, ...rest] = data.split(':');
+  if (action === 'decline') {
+    await ctx.answerCallbackQuery('No problem.');
+    try { await ctx.editMessageText('👍 Okay, I won’t watch it. Ask any time.', { parse_mode: 'HTML' }); } catch {}
+    return;
+  }
+  if (action === 'start') {
+    const token = rest.join(':');
+    const kind = token.split(':')[0];
+    const encoded = token.slice(kind.length + 1);
+    let spec;
+    try {
+      spec = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+    } catch {
+      await ctx.answerCallbackQuery('That watch offer expired.');
+      return;
+    }
+    const wm = getWatchManager(ctx.api ? { api: ctx.api } : undefined);
+    try {
+      const { id } = wm.startWatch({ chatId: ctx.chat.id, label: spec.l, kind, params: spec.p });
+      await ctx.answerCallbackQuery('Watching in the background.');
+      try {
+        await ctx.editMessageText(`👀 <b>Watching (#${id}).</b>\nI’ll ping you the moment ${escapeHtml(spec.l)} — keep chatting, I’m on it in the background. Stop with “stop watch #${id}”.`, { parse_mode: 'HTML' });
+      } catch {}
+    } catch (err) {
+      await ctx.answerCallbackQuery('Could not start.');
+      try { await ctx.editMessageText(`⚠️ ${escapeHtml(err.message)}`, { parse_mode: 'HTML' }); } catch {}
+    }
+    return;
+  }
+  return ctx.answerCallbackQuery();
 }
 
 async function auditRecentRepos(ctx) {
@@ -708,4 +826,5 @@ async function withFriendlyFailure(ctx, fn) {
 module.exports = {
   handleText,
   handleApprovalCallback,
+  handleWatchCallback,
 };
