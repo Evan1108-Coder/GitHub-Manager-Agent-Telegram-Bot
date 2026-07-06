@@ -100,8 +100,8 @@ test('the broad status catch-all does not shadow a more specific intent', async 
   assert.ok(!out.includes('Bot Status'));
 });
 
-test('plain status still falls back to the Bot Status screen', async () => {
+test('explicit bot status command still shows the operational screen', async () => {
   const ctx = fakeCtx();
-  await handleText(ctx, 'status');
+  await handleText(ctx, 'bot status');
   assert.ok(ctx.replies.join('\n').includes('Bot Status'));
 });

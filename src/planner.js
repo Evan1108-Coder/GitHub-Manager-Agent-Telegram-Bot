@@ -120,6 +120,7 @@ function parseGithubReadRequest(text) {
   const repo = extractRepo(raw);
   if (!repo) return null;
   if (/failed workflow|workflow failures|actions failures|failed actions/i.test(raw)) return { kind: 'workflow_failures', repo };
+  if (/auto[-\s]?update|update code|views|visitor|badge|profile.*home|check.*code|inspect.*code|readme/i.test(raw)) return { kind: 'inspect_repo_code', repo };
   if (/open prs|pull requests|prs/i.test(raw)) return { kind: 'list_prs', repo };
   if (/releases/i.test(raw)) return { kind: 'list_releases', repo };
   if (/issues/i.test(raw)) return { kind: 'list_issues', repo };

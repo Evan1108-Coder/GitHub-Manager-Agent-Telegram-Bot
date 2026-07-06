@@ -7,6 +7,7 @@ const { createScheduledJob, listScheduledJobs } = require('./scheduler');
 const { parseFlexibleSchedule, shiftSchedule, computeNextRun } = require('./utils/time');
 const { escapeHtml, sendLong, oneLine, mdToHtml } = require('./utils/format');
 const { delayedProgress, withTyping, friendlyError } = require('./utils/ux');
+const { remember, ack, evidenceSummary } = require('./utils/actionlog');
 const { classifyComplexity, StagedStatus, STAGES } = require('./utils/staged');
 const { runWithDeadline, DeadlineError, LIMITS } = require('./utils/guard');
 const { renderJob, renderAudit } = require('./renderers');
@@ -35,7 +36,8 @@ async function handleTextInner(ctx, text, context = {}) {
   const normalized = text.trim();
 
   if (isThanksOrAck(normalized)) {
-    return reply(ctx, '👍 Got it.');
+    remember(chatId, { action: 'acknowledged user message', evidence: normalized.slice(0, 120), result: 'short acknowledgement only' });
+    return reply(ctx, ack(normalized));
   }
 
   const timezone = getSetting('timezone', getConfig().defaultTimezone);
@@ -191,10 +193,10 @@ async function handleTextInner(ctx, text, context = {}) {
     return handleModelChange(ctx, normalized);
   }
 
-  // Broad status/settings catch-all runs LAST (just before the LLM fallback) so
-  // it can't shadow more specific intents like "github token status", "status of
-  // trends", or "config my stats" that also contain the word status/config.
-  if (/\b(settings|status|config|setup)\b/i.test(normalized)) {
+  // Avoid a broad canned "status" template. Only exact operational commands use
+  // showStatus; natural status/follow-up questions fall through to the agent
+  // answer with recent action evidence.
+  if (/^(settings|config|setup|bot status)$/i.test(normalized)) {
     return showStatus(ctx);
   }
 
@@ -215,6 +217,7 @@ async function generalAnswer(ctx, text, context = {}) {
   if (staged) await staged.stage(STAGES.thinking);
 
   const history = getConversation(ctx.chat.id, 8);
+  const recentEvidence = evidenceSummary(ctx.chat.id);
   const config = getConfig();
   const system = [
     'You are a personal GitHub agent in Telegram.',
@@ -231,8 +234,8 @@ async function generalAnswer(ctx, text, context = {}) {
     const budgetMs = (config.llmTimeoutMs || 35000) + 5000;
     const response = await runWithDeadline(
       () => withTyping(ctx, () => chat(model, [
-        { role: 'system', content: system },
-        { role: 'user', content: `User GitHub: ${config.githubUsername || getSetting('github_username', 'unknown')}\nContext: ${JSON.stringify(context).slice(0, 1200)}\nRecent chat: ${JSON.stringify(history).slice(0, 2500)}\nCurrent message: ${text}` },
+        { role: 'system', content: system + ' For follow-up/status questions, use Recent recorded actions as evidence. Do not invent API quota, stats, or tool results; say what was actually checked.' },
+        { role: 'user', content: `User GitHub: ${config.githubUsername || getSetting('github_username', 'unknown')}\nContext: ${JSON.stringify(context).slice(0, 1200)}\nRecent recorded actions:\n${recentEvidence}\nRecent chat: ${JSON.stringify(history).slice(0, 2500)}\nCurrent message: ${text}` },
       ], { maxTokens: 700 })),
       budgetMs,
       { label: 'model reply' }
@@ -243,6 +246,7 @@ async function generalAnswer(ctx, text, context = {}) {
       return sendLong(ctx, '🤔 <b>I could not put together a useful reply just now.</b>\nTry rephrasing, or ask a GitHub-specific request like “show jobs”, “stats”, or “audit my repos”.');
     }
     addConversation(ctx.chat.id, 'assistant', response);
+    remember(ctx.chat.id, { action: 'answered via model', evidence: `message=${text.slice(0, 120)}`, result: response.slice(0, 200) });
     if (staged) await staged.done();
     return sendLong(ctx, `💬 ${rendered}`);
   } catch (err) {
@@ -510,6 +514,36 @@ async function handleGithubRead(ctx, request) {
     const lines = [`🚨 <b>Failed workflow runs</b>\n<code>${escapeHtml(request.repo)}</code>`];
     failed.slice(0, 5).forEach(run => lines.push(`- ${escapeHtml(run.name || 'workflow')} #${run.run_number}: ${escapeHtml(run.html_url)}`));
     return sendLong(ctx, lines.join('\n'));
+  }
+  if (request.kind === 'inspect_repo_code') {
+    const repo = await github.getRepo(request.repo);
+    let readme = '';
+    try { readme = await github.getReadme(request.repo); } catch {}
+    let workflows = [];
+    try {
+      const listing = await github.get(`/repos/${request.repo.split('/')[0]}/${request.repo.split('/')[1]}/contents/.github/workflows`);
+      workflows = Array.isArray(listing) ? listing.map(f => f.name) : [];
+    } catch {}
+    const evidence = [
+      `repo default branch: ${repo.default_branch || 'unknown'}`,
+      `README checked: ${readme ? `${readme.length} chars` : 'not found/readable'}`,
+      `workflow files checked: ${workflows.length ? workflows.join(', ') : 'none found/readable'}`,
+    ].join('; ');
+    const lower = readme.toLowerCase();
+    const hasDynamicBadge = /komarev|visitor|views|profile-views|github-readme-stats|streak-stats|github-profile-trophy|shields\.io/.test(lower);
+    const hasWorkflow = workflows.length > 0;
+    remember(ctx.chat.id, { action: `inspected repo code for ${request.repo}`, evidence, result: `dynamic badges/signals=${hasDynamicBadge}; workflows=${hasWorkflow}` });
+    return sendLong(ctx, [
+      `I checked <code>${escapeHtml(request.repo)}</code> instead of guessing.`,
+      `Evidence: ${escapeHtml(evidence)}.`,
+      hasDynamicBadge
+        ? 'I found README signals that likely update dynamically (badges/widgets such as views/stats).'
+        : 'I did not find obvious dynamic view/stat badge code in the README from this check.',
+      hasWorkflow
+        ? 'There are workflow files, so scheduled/automated updates may exist there; inspect the named workflow files next if you want the exact mechanism.'
+        : 'I did not find a .github/workflows directory, so I do not see repo-side scheduled automation from this check.',
+      'I’m not reporting GitHub API quota or view numbers here because those were not the thing I verified.'
+    ].join('\n'));
   }
   if (request.kind === 'list_prs') {
     const prs = await github.listPulls(request.repo, { state: 'open', perPage: 10 });
