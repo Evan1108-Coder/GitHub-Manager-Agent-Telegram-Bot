@@ -9,6 +9,7 @@ const { classifyFile, downloadTelegramFile, extractText, getSupportedExtensions,
 const { openDb, getSetting, setSetting } = require('./db');
 const { chooseDefaultModel, supportsVision, chat, chatWithVision } = require('./llm/providers');
 const { withTyping, friendlyError } = require('./utils/ux');
+const { createBusyState } = require('./utils/busy');
 const { checkForUpdate, applyUpdate } = require('./update');
 const { execSync } = require('child_process');
 
@@ -17,6 +18,7 @@ const PM2_NAME = process.env.PM2_PROCESS_NAME || 'github-manager-bot';
 
 function createBot(token) {
   const bot = new Bot(token);
+  const busyState = createBusyState();
 
   // Learn where to deliver scheduled reports: the first time the owner DMs the
   // bot, remember that private chat id. This is what makes scheduled jobs work
@@ -50,7 +52,10 @@ function createBot(token) {
     ].join('\n'));
   });
 
-  bot.command('status', ctx => handleText(ctx, 'status'));
+  bot.command('status', ctx => {
+    if (busyState.busy(ctx.chat.id)) return busyState.handleWhileBusy(ctx, 'status', { reply: message => sendLong(ctx, escapeHtml(message)) });
+    return handleText(ctx, 'status');
+  });
   bot.command('settings', ctx => handleText(ctx, 'settings'));
   bot.command('reset_setup', ctx => handleText(ctx, 'reset setup'));
   bot.command('models', ctx => handleText(ctx, 'models'));
@@ -139,7 +144,16 @@ function createBot(token) {
       if (result.done) seedDefaultJobs();
       return sendLong(ctx, result.message);
     }
-    return handleText(ctx, text, { telegram: getTelegramContext(ctx) });
+    if (busyState.busy(ctx.chat.id)) {
+      const handled = await busyState.handleWhileBusy(ctx, text, { reply: message => sendLong(ctx, escapeHtml(message)) });
+      if (handled) return;
+    }
+    busyState.start(ctx.chat.id, { label: makeTaskLabel(text), stage: 'working', detail: 'I can still answer questions about this task state.' });
+    try {
+      return await handleText(ctx, text, { telegram: getTelegramContext(ctx) });
+    } finally {
+      busyState.finish(ctx.chat.id);
+    }
   });
 
   bot.on(['message:document', 'message:photo'], async ctx => {
@@ -203,6 +217,14 @@ function createBot(token) {
   }
 
   return bot;
+}
+
+function makeTaskLabel(text) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  if (/\b(audit|repos?|repository|github)\b/i.test(t)) return 'the GitHub repo request';
+  if (/\b(job|schedule|reminder)\b/i.test(t)) return 'the scheduled job request';
+  if (/\b(status|settings|models|watches)\b/i.test(t)) return 'the status check';
+  return t ? `“${t.slice(0, 60)}${t.length > 60 ? '…' : ''}”` : 'your request';
 }
 
 function captureOwnerChat(ctx) {
