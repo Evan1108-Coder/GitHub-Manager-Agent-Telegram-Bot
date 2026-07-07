@@ -3,6 +3,7 @@ const { openDb, getSetting, setSetting } = require('./db');
 const { GitHubClient } = require('./github/client');
 const { auditRepoPresentation, suspiciousCommitMessages } = require('./github/audit');
 const { chatJson, chat, chooseDefaultModel } = require('./llm/providers');
+const { languagePolicy } = require('./utils/language');
 const { fetchAllTrends } = require('./trends/sources');
 const { sendLong, escapeHtml, oneLine } = require('./utils/format');
 const { renderTrendDigest, renderStatsReport, renderAudit } = require('./renderers');
@@ -62,7 +63,7 @@ async function buildTrendDigest() {
   }
   try {
     const json = await chatJson(model, [
-      { role: 'system', content: 'Return compact JSON only. You select developer trends that teach practical lessons for improving GitHub projects, READMEs, project ideas, and public presentation.' },
+      { role: 'system', content: 'Return compact JSON only. You select developer trends that teach practical lessons for improving GitHub projects, READMEs, project ideas, and public presentation. ' + languagePolicy() },
       { role: 'user', content: `Use these trend items and return JSON with projects[3]{title,url,why}, ideas[2]{title,summary}, takeaways[3] strings. Keep it concise.\n${JSON.stringify(items.slice(0, 30))}` },
     ], { maxTokens: 1200 });
     return renderTrendDigest(json);

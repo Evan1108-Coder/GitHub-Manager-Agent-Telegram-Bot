@@ -10,6 +10,7 @@ const { openDb, getSetting, setSetting } = require('./db');
 const { chooseDefaultModel, supportsVision, chat, chatWithVision } = require('./llm/providers');
 const { withTyping, friendlyError } = require('./utils/ux');
 const { createBusyState } = require('./utils/busy');
+const { languagePolicy } = require('./utils/language');
 const { checkForUpdate, applyUpdate } = require('./update');
 const { execSync } = require('child_process');
 
@@ -269,7 +270,7 @@ async function summarizeText(text, caption) {
   const model = chooseDefaultModel();
   if (!model) return oneLine(text, 1200) || 'No text extracted.';
   const response = await chat(model, [
-    { role: 'system', content: 'Summarize uploaded files for a GitHub agent. Keep it concise and say how it might be useful for GitHub/repo work.' },
+    { role: 'system', content: 'Summarize uploaded files for a GitHub agent. Keep it concise and say how it might be useful for GitHub/repo work.\n' + languagePolicy() },
     { role: 'user', content: `Caption: ${caption || 'none'}\n\nFile text:\n${text.slice(0, 12000)}` },
   ], { maxTokens: 550 });
   return response;
@@ -281,7 +282,7 @@ async function summarizeImage(localPath, fileName, caption) {
   const imageBase64 = await getImageBase64(localPath);
   const mimeType = getMimeType(fileName);
   return chatWithVision(model, [
-    { role: 'system', content: 'Analyze this image for a GitHub/project agent. Mention UI/docs/repo presentation relevance if any.' },
+    { role: 'system', content: 'Analyze this image for a GitHub/project agent. Mention UI/docs/repo presentation relevance if any.\n' + languagePolicy() },
     { role: 'user', content: `Caption: ${caption || 'none'}\nImage MIME: ${mimeType}\nImage data is available to the provider if supported.` },
   ], imageBase64, mimeType, { maxTokens: 700 });
 }

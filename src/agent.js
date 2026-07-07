@@ -8,6 +8,7 @@ const { parseFlexibleSchedule, shiftSchedule, computeNextRun } = require('./util
 const { escapeHtml, sendLong, oneLine, mdToHtml } = require('./utils/format');
 const { delayedProgress, withTyping, friendlyError } = require('./utils/ux');
 const { remember, ack, evidenceSummary } = require('./utils/actionlog');
+const { languagePolicy } = require('./utils/language');
 const { classifyComplexity, StagedStatus, STAGES } = require('./utils/staged');
 const { runWithDeadline, DeadlineError, LIMITS } = require('./utils/guard');
 const { renderJob, renderAudit } = require('./renderers');
@@ -226,6 +227,7 @@ async function generalAnswer(ctx, text, context = {}) {
     'If the user asks during setup-like discussion, answer then bring them back to the current task.',
     'Do not claim you performed an action unless a tool/result says it happened.',
     'You have no callable tools or functions in this chat — never emit tool-call or function-call markup; just reply in plain prose.',
+    languagePolicy(),
   ].join(' ');
   try {
     // Feature 2 — hard wall-clock deadline around the model call. The escape is a
