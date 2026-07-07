@@ -11,6 +11,7 @@ const { chooseDefaultModel, supportsVision, chat, chatWithVision } = require('./
 const { withTyping, friendlyError } = require('./utils/ux');
 const { createBusyState } = require('./utils/busy');
 const { languagePolicy } = require('./utils/language');
+const { remember } = require('./utils/actionlog');
 const { checkForUpdate, applyUpdate } = require('./update');
 const { execSync } = require('child_process');
 
@@ -45,10 +46,27 @@ function createBot(token) {
     return handleText(ctx, 'status');
   });
   bot.command('settings', ctx => handleText(ctx, 'settings'));
-  bot.command('reset_setup', ctx => handleText(ctx, 'reset setup'));
+  bot.command('reset', ctx => handleText(ctx, 'reset setup'));
   bot.command('models', ctx => handleText(ctx, 'models'));
   bot.command('jobs', ctx => handleText(ctx, 'jobs'));
   bot.command('watches', ctx => handleText(ctx, 'watches'));
+
+  const ability = (phrase, withArgs = true) => ctx => {
+    const args = withArgs && ctx.match ? String(ctx.match).trim() : '';
+    return handleText(ctx, args ? `${phrase} ${args}` : phrase);
+  };
+  bot.command('audit', ability('audit repo'));
+  bot.command('stats', ability('show my GitHub stats', false));
+  bot.command('summary', ability('summarize today on GitHub', false));
+  bot.command('trends', ability('fetch builder trends', false));
+  bot.command('profile', ability('profile README update', false));
+  bot.command('readme', ability('draft a README patch for'));
+  bot.command('compare', ability('compare stars for'));
+  bot.command('schedule', ability('schedule'));
+  bot.command('watch', ability('watch'));
+  bot.command('files', ability('uploaded files', false));
+  bot.command('approvals', ability('approval log', false));
+  bot.command('telemetry', ability('response time telemetry', false));
 
   try {
     bot.api.setMyCommands(GITHUB_COMMANDS).catch(err => console.error('[Bot] setMyCommands failed:', err.message));
@@ -74,6 +92,7 @@ function createBot(token) {
 
       if (!info.available) {
         const v = info.localVersion ? ` (v${escapeHtml(info.localVersion)})` : '';
+        remember(ctx.chat.id, { action: 'checked /update command', evidence: `local=${info.localVersion || info.local || 'unknown'} remote=${info.remoteVersion || info.remote || 'unknown'}`, result: 'Already on latest version; no update applied.', cost: 'none' });
         return sendLong(ctx, `✅ <b>Already on the latest version${v}.</b>\nNothing to update.`);
       }
 
@@ -88,8 +107,10 @@ function createBot(token) {
         '\nApplying now — I’ll health-check the new code and roll back automatically if it fails to start.',
       ].filter(Boolean).join('\n'));
 
+      remember(ctx.chat.id, { action: 'found available /update', evidence: `${verPart}; changelog=${(info.changelog || []).slice(0, 8).join(' | ')}`, result: 'Applying update with health check.', cost: 'none' });
       const result = applyUpdate();
       if (!result.ok) {
+        remember(ctx.chat.id, { action: 'failed /update command', evidence: `stage=${result.stage || 'unknown'} message=${result.message || 'unknown'}`, result: result.rolledBack ? 'Update failed and rolled back.' : 'Update failed before completion.', cost: 'none' });
         const rolled = result.rolledBack
           ? '\n\n↩️ <b>Rolled back</b> to the previous working version — the bot is still running the old code.'
           : '';
@@ -105,6 +126,7 @@ function createBot(token) {
       const integrityPart = result.dataIntegrity
         ? `\n<b>Data integrity:</b> ${result.dataIntegrity.ok ? '✅ all user data untouched' : '⚠️ mismatch'} (checked ${result.dataIntegrity.checked.length} file${result.dataIntegrity.checked.length === 1 ? '' : 's'}).`
         : '';
+      remember(ctx.chat.id, { action: 'completed /update command', evidence: `prev=${result.prevHead || 'unknown'} new=${result.newHead || 'unknown'} files=${(result.filesChanged || []).map(f => `${f.status} ${f.file}`).join(', ')}`, result: `Updated successfully${result.remoteVersion ? ` to ${result.remoteVersion}` : ''}; restarting.`, cost: 'none' });
       await sendLong(ctx, [
         `✅ <b>Updated successfully!</b> ${escapeHtml((result.prevHead || '').slice(0, 7))} → ${escapeHtml((result.newHead || '').slice(0, 7))}`,
         result.depsInstalled ? '📦 Dependencies were reinstalled.' : '',
@@ -225,21 +247,33 @@ const GITHUB_COMMANDS = [
   { command: 'start', description: 'Start the GitHub Manager Agent' },
   { command: 'help', description: 'Show commands, abilities, and examples' },
   { command: 'status', description: 'Bot/runtime status and setup summary' },
+  { command: 'audit', description: 'Audit repos/READMEs/presentation issues' },
+  { command: 'stats', description: 'Show GitHub stats and snapshots' },
+  { command: 'summary', description: 'Summarize today’s GitHub activity' },
+  { command: 'trends', description: 'Fetch builder trends for project ideas' },
+  { command: 'profile', description: 'Inspect/update profile README safely' },
+  { command: 'readme', description: 'Draft README patch for a repo' },
+  { command: 'compare', description: 'Compare repo metrics such as stars' },
+  { command: 'schedule', description: 'Create/edit natural-language jobs' },
+  { command: 'watch', description: 'Offer a background GitHub watch' },
+  { command: 'files', description: 'Search uploaded files' },
+  { command: 'approvals', description: 'Show approval/audit log' },
+  { command: 'telemetry', description: 'Show latency/response telemetry' },
   { command: 'settings', description: 'Current preferences and configuration' },
   { command: 'models', description: 'Available AI models and active default' },
   { command: 'jobs', description: 'List scheduled GitHub jobs' },
   { command: 'watches', description: 'List background watches/monitors' },
   { command: 'update', description: 'Pull latest GitHub code with health check' },
-  { command: 'reset_setup', description: 'Restart onboarding/setup' },
+  { command: 'reset', description: 'Restart onboarding/setup' },
 ];
 
 function renderHelpMenu() {
   return [
     '✨ <b>GitHub Manager Agent — Commands</b>',
     '',
-    ...GITHUB_COMMANDS.map(c => `/<b>${escapeHtml(c.command)}</b> — ${escapeHtml(c.description)}`),
+    ...GITHUB_COMMANDS.map(c => `<code>/${escapeHtml(c.command)}</code> — ${escapeHtml(c.description)}`),
     '',
-    '<b>Natural-language jobs I can do:</b>',
+    '<b>Ability examples:</b>',
     '🔎 <code>audit my repos</code> — inspect READMEs, descriptions, docs, presentation issues',
     '📊 <code>show my GitHub stats</code> — stars/forks/views/snapshots when available',
     '📌 <code>summarize what I did today</code> — recent GitHub activity summary',
@@ -319,4 +353,4 @@ function validateStartupConfig() {
   if (!status.GITHUB_TOKEN) console.warn('[Config] GITHUB_TOKEN missing: GitHub actions will fail until set.');
 }
 
-module.exports = { createBot, validateStartupConfig };
+module.exports = { createBot, validateStartupConfig, GITHUB_COMMANDS, renderHelpMenu };
