@@ -217,7 +217,7 @@ function createBot(token) {
       });
     } catch (err) {
       const message = /xref|pdf|parse|invalid|corrupt|password|encrypt|unsupported file/i.test(err.message || '')
-        ? `📄 <b>I couldn’t read ${escapeHtml(fileName)}.</b>\nIt may be scanned, encrypted, or in a format I can’t parse yet. Try a text-based PDF, a .docx, or a .txt export.`
+        ? `📄 <b>I couldn’t read ${escapeHtml(fileName)}.</b>\nIt may be scanned, encrypted, empty, or in a format I can’t parse yet. Try a text-based PDF, RTF, TXT/MD/CSV/JSON/HTML, or a supported image.`
         : friendlyError(err);
       return sendLong(ctx, message);
     }
