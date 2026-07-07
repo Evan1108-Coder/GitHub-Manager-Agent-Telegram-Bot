@@ -38,20 +38,7 @@ function createBot(token) {
     return sendLong(ctx, '👋 <b>GitHub Manager Agent</b>\nI’m ready. Ask naturally, or use /help for examples.');
   });
 
-  bot.command('help', async ctx => {
-    return sendLong(ctx, [
-      '✨ <b>Examples</b>',
-      '🔎 audit my repos',
-      '📊 show my GitHub stats',
-      '📌 summarize what I did today',
-      '⏰ every Monday at 9 compare stars for Evan1108-Coder/TrendForge-Telegram-Bot',
-      '🛠️ update my profile README',
-      '🧭 fetch morning builder trends',
-      '',
-      'You can also reply to messages, forward GitHub-related text, or upload supported files.',
-      `Supported files: ${escapeHtml(getSupportedExtensions().join(', '))}`,
-    ].join('\n'));
-  });
+  bot.command('help', async ctx => sendLong(ctx, renderHelpMenu()));
 
   bot.command('status', ctx => {
     if (busyState.busy(ctx.chat.id)) return busyState.handleWhileBusy(ctx, 'status', { reply: message => sendLong(ctx, escapeHtml(message)) });
@@ -62,6 +49,12 @@ function createBot(token) {
   bot.command('models', ctx => handleText(ctx, 'models'));
   bot.command('jobs', ctx => handleText(ctx, 'jobs'));
   bot.command('watches', ctx => handleText(ctx, 'watches'));
+
+  try {
+    bot.api.setMyCommands(GITHUB_COMMANDS).catch(err => console.error('[Bot] setMyCommands failed:', err.message));
+  } catch (err) {
+    console.error('[Bot] setMyCommands failed:', err.message);
+  }
 
   let updateInProgress = false;
   bot.command('update', async ctx => {
@@ -226,6 +219,38 @@ function makeTaskLabel(text) {
   if (/\b(job|schedule|reminder)\b/i.test(t)) return 'the scheduled job request';
   if (/\b(status|settings|models|watches)\b/i.test(t)) return 'the status check';
   return t ? `“${t.slice(0, 60)}${t.length > 60 ? '…' : ''}”` : 'your request';
+}
+
+const GITHUB_COMMANDS = [
+  { command: 'start', description: 'Start the GitHub Manager Agent' },
+  { command: 'help', description: 'Show commands, abilities, and examples' },
+  { command: 'status', description: 'Bot/runtime status and setup summary' },
+  { command: 'settings', description: 'Current preferences and configuration' },
+  { command: 'models', description: 'Available AI models and active default' },
+  { command: 'jobs', description: 'List scheduled GitHub jobs' },
+  { command: 'watches', description: 'List background watches/monitors' },
+  { command: 'update', description: 'Pull latest GitHub code with health check' },
+  { command: 'reset_setup', description: 'Restart onboarding/setup' },
+];
+
+function renderHelpMenu() {
+  return [
+    '✨ <b>GitHub Manager Agent — Commands</b>',
+    '',
+    ...GITHUB_COMMANDS.map(c => `/<b>${escapeHtml(c.command)}</b> — ${escapeHtml(c.description)}`),
+    '',
+    '<b>Natural-language jobs I can do:</b>',
+    '🔎 <code>audit my repos</code> — inspect READMEs, descriptions, docs, presentation issues',
+    '📊 <code>show my GitHub stats</code> — stars/forks/views/snapshots when available',
+    '📌 <code>summarize what I did today</code> — recent GitHub activity summary',
+    '⏰ <code>every Monday at 9 compare stars for owner/repo</code> — create scheduled jobs',
+    '🛠️ <code>update my profile README</code> — inspect/draft controlled profile updates',
+    '🧭 <code>fetch builder trends</code> — trend digest for project ideas',
+    '👀 <code>watch PR #12 in owner/repo</code> — offer an opt-in background watch',
+    '',
+    'You can also reply to messages, forward GitHub-related text, or upload supported files.',
+    `Supported files: ${escapeHtml(getSupportedExtensions().join(', '))}`,
+  ].join('\n');
 }
 
 function captureOwnerChat(ctx) {
