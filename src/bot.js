@@ -5,7 +5,7 @@ const { sendLong, escapeHtml, oneLine, mdToHtml } = require('./utils/format');
 const { handleText, handleApprovalCallback, handleWatchCallback } = require('./agent');
 const { seedDefaultJobs } = require('./scheduler');
 const { getWatchManager } = require('./watch-setup');
-const { classifyFile, downloadTelegramFile, extractText, getSupportedExtensions, getImageBase64, getMimeType } = require('./files');
+const { classifyFile, downloadTelegramFile, extractText, getSupportedExtensions, getImageBase64, getMimeType, voiceCapabilityMessage, unsupportedAttachmentMessage } = require('./files');
 const { openDb, getSetting, setSetting, addConversation } = require('./db');
 const { chooseDefaultModel, supportsVision, chat, chatWithVision } = require('./llm/providers');
 const { withTyping, friendlyError } = require('./utils/ux');
@@ -176,6 +176,16 @@ function createBot(token) {
     } finally {
       busyState.finish(ctx.chat.id);
     }
+  });
+
+  bot.on('message:voice', ctx => sendLong(ctx, escapeHtml(voiceCapabilityMessage())));
+
+  bot.on(['message:audio', 'message:video', 'message:video_note', 'message:animation'], ctx => {
+    const kind = ctx.message.audio ? 'audio file'
+      : ctx.message.video ? 'video'
+        : ctx.message.video_note ? 'video message'
+          : 'animation';
+    return sendLong(ctx, escapeHtml(unsupportedAttachmentMessage(kind)));
   });
 
   bot.on(['message:document', 'message:photo'], async ctx => {

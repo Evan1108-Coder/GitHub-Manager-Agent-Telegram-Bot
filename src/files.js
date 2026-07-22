@@ -115,6 +115,14 @@ function naturalSort(a, b) {
   return a.localeCompare(b, undefined, { numeric: true });
 }
 
+function voiceCapabilityMessage() {
+  return 'I received your voice message, but GitHub Manager cannot transcribe audio yet. Please send the request as text; I won’t guess at audio I cannot hear.';
+}
+
+function unsupportedAttachmentMessage(kind = 'attachment') {
+  return `I received the ${kind}, but GitHub Manager cannot process that attachment type yet. Please send text or one of these supported uploads: ${getSupportedExtensions().join(', ')}.`;
+}
+
 module.exports = {
   classifyFile,
   getSupportedExtensions,
@@ -122,4 +130,6 @@ module.exports = {
   extractText,
   getImageBase64,
   getMimeType,
+  voiceCapabilityMessage,
+  unsupportedAttachmentMessage,
 };
